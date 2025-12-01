@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  consul:
+    image: hashicorp/consul:1.17
+    container_name: consul
+    command: ["agent", "-dev", "-ui", "-client=0.0.0.0", "-data-dir=/consul/data"]
+    ports:
+      - "8500:8500"
+    volumes:
+      - consul-data:/consul/data
+  controller:
+    image: 24802117/peer-wan-controller:latest
+    container_name: peer-wan-controller
+    ports:
+      - "8080:8080"
+    environment:
+      - TOKEN=changeme
+      - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
+    command: ["/app/controller", "--token=${TOKEN:-changeme}", "--store=consul", "--consul-addr=${CONSUL_HTTP_ADDR:-http://consul:8500}"]
+    volumes:
+      - ./web:/app/web:ro
+    depends_on:
+      - consul
+volumes:
+  consul-data:

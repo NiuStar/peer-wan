@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>peer-wan UI</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; background: #0c0c16; color: #e6e6f0; }
+    h1 { margin-bottom: 4px; }
+    .card { background: #141426; padding: 12px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+    label { display: inline-block; margin-right: 8px; }
+    input { padding: 4px 6px; margin-right: 8px; background: #0f0f20; color: #e6e6f0; border: 1px solid #2a2a4a; border-radius: 4px; }
+    button { padding: 6px 10px; background: #2d7df6; border: none; color: white; border-radius: 4px; cursor: pointer; }
+    .btn-secondary { background: #414166; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { padding: 6px; border-bottom: 1px solid #2a2a4a; text-align: left; }
+    th { color: #8fb3ff; }
+    .pill { padding: 2px 6px; border-radius: 10px; font-size: 12px; }
+    .pill.up { background: #173f2f; color: #7cf19c; }
+    .pill.down { background: #432020; color: #ff8a8a; }
+    #graph { width: 100%; height: 400px; background: #0f0f20; border: 1px solid #2a2a4a; border-radius: 8px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>peer-wan 控制台</h1>
+  <div class="card">
+    <label>API 基址</label><input id="base" value="" placeholder="http://127.0.0.1:8080">
+    <label>Token</label><input id="token" value="" placeholder="X-Auth-Token">
+    <button onclick="reloadAll()">刷新</button>
+  </div>
+  <div class="card">
+    <h3>节点</h3>
+    <div id="nodes"></div>
+    <div style="margin-top:8px;">
+      <label>Node ID</label><input id="detailNode" placeholder="edge-1" style="width:120px;">
+      <button onclick="loadPlan()">查看计划</button>
+      <button class="btn-secondary" onclick="savePlanSnapshot()">保存快照</button>
+      <button class="btn-secondary" onclick="diffPlan()">对比上次快照</button>
+      <button class="btn-secondary" onclick="loadPlanHistory()">加载历史</button>
+      <button class="btn-secondary" onclick="rollbackPlan()">回滚所选版本</button>
+      <button onclick="loadNodeDetail()">查看详情</button>
+    </div>
+    <div id="plan"></div>
+    <div id="planHistory"></div>
+    <div id="nodeDetail"></div>
+  </div>
+  <div class="card">
+    <h3>健康</h3>
+    <div id="health"></div>
+  </div>
+  <div class="card">
+    <h3>拓扑（基于健康延迟的临时视图）</h3>
+    <div id="topology"></div>
+    <canvas id="graph"></canvas>
+  </div>
+  <div class="card">
+    <h3>审计</h3>
+    <div id="audit"></div>
+  </div>
+  <script>
+    const baseInput = document.getElementById('base');
+    const tokenInput = document.getElementById('token');
+    const defaultBase = localStorage.getItem('peerwan_base') || window.location.origin || 'http://127.0.0.1:8080';
+    baseInput.value = defaultBase;
+    tokenInput.value = localStorage.getItem('peerwan_token') || '';
+    let lastPlan = null;
+
+    async function api(path) {
+      const base = baseInput.value.replace(/\/+$/, '');
+      const token = tokenInput.value;
+      localStorage.setItem('peerwan_base', base);
+      localStorage.setItem('peerwan_token', token);
+      const res = await fetch(base + path, {
+        headers: token ? {'X-Auth-Token': token} : {}
+      });
+      if (!res.ok) throw new Error(path + ' ' + res.status);
+      return res.json();
+    }
+
+    function renderTable(el, columns, rows) {
+      if (!rows.length) { el.innerHTML = '<p>无数据</p>'; return; }
+      let html = '<table><thead><tr>';
+      columns.forEach(c => html += `<th>${c.label}</th>`);
+      html += '</tr></thead><tbody>';
+      rows.forEach(r => {
+        html += '<tr>';
+        columns.forEach(c => html += `<td>${c.render(r)}</td>`);
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    async function loadNodes() {
+      const data = await api('/api/v1/nodes');
+      renderTable(document.getElementById('nodes'), [
+        {label:'ID', render:r=>r.id},
+        {label:'Endpoints', render:r=>(r.endpoints||[]).join(', ')},
+        {label:'CIDRs', render:r=>(r.cidrs||[]).join(', ')},
+        {label:'Overlay', render:r=>r.overlayIp||''},
+        {label:'ASN', render:r=>r.asn||''},
+        {label:'Version', render:r=>r.configVersion||''},
+      ], data);
+    }
+
+    async function loadHealth() {
+      const data = await api('/api/v1/health');
+      renderTable(document.getElementById('health'), [
+        {label:'Node', render:r=>r.nodeId},
+        {label:'状态', render:r=>`<span class="pill ${r.status==='down'?'down':'up'}">${r.status||'unknown'}</span>`},
+        {label:'延迟(ms)', render:r=>JSON.stringify(r.latencyMs||{})},
+        {label:'丢包(%)', render:r=>JSON.stringify(r.packetLoss||{})},
+        {label:'FRR邻居', render:r=>JSON.stringify(r.frrState||{})},
+        {label:'时间', render:r=>r.timestamp},
+      ], data);
+      return data;
+    }
+
+    async function loadAudit() {
+      const data = await api('/api/v1/audit');
+      renderTable(document.getElementById('audit'), [
+        {label:'时间', render:r=>r.timestamp},
+        {label:'操作者', render:r=>r.actor},
+        {label:'动作', render:r=>r.action},
+        {label:'目标', render:r=>r.target},
+        {label:'详情', render:r=>r.detail||''},
+      ], data);
+    }
+
+    async function loadPlan() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      const data = await api('/api/v1/plan?nodeId='+encodeURIComponent(nodeId));
+      lastPlan = data;
+      let html = `<p>计划版本: ${data.configVersion||''} | 消息: ${data.message||''}</p>`;
+      document.getElementById('plan').innerHTML = html;
+      renderTable(document.getElementById('plan'), [
+        {label:'Peer', render:r=>r.id},
+        {label:'Endpoint', render:r=>r.endpoint||''},
+        {label:'AllowedIPs', render:r=>(r.allowedIPs||[]).join(', ')},
+      ], data.wireGuardPeers || []);
+    }
+
+    async function loadPlanHistory() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      const data = await api('/api/v1/plan/history?nodeId='+encodeURIComponent(nodeId));
+      planHistoryCache = data.reverse();
+      renderTimeline();
+    }
+
+    async function rollbackPlan() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      if (!planHistoryCache.length) { alert('请先加载历史'); return; }
+      const selected = document.querySelector('input[name="planVersion"]:checked');
+      if (!selected) { alert('请选择一个版本'); return; }
+      const vNum = parseInt(selected.value, 10);
+      const base = baseInput.value.replace(/\/+$/, '');
+      const token = tokenInput.value;
+      const res = await fetch(base + '/api/v1/plan/rollback', {
+        method: 'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, token?{'X-Auth-Token':token}:{}),
+        body: JSON.stringify({nodeId, version:vNum})
+      });
+      if (!res.ok) { alert('回滚失败: '+res.status); return; }
+      const body = await res.json();
+      alert('回滚完成，已更新全局版本: '+(body.version||'')+'，请等待 Agent 拉取新版计划');
+      loadPlanHistory();
+    }
+
+    async function loadNodeDetail() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      const health = await api('/api/v1/health');
+      const h = (health||[]).find(x=>x.nodeId===nodeId);
+      if (!h) { document.getElementById('nodeDetail').innerHTML = '<p>无健康数据</p>'; return; }
+      let html = '<p><b>延迟</b>: '+JSON.stringify(h.latencyMs||{})+'</p>';
+      html += '<p><b>丢包</b>: '+JSON.stringify(h.packetLoss||{})+'</p>';
+      html += '<p><b>FRR 邻居</b>: '+JSON.stringify(h.frrState||{})+'</p>';
+      document.getElementById('nodeDetail').innerHTML = html;
+    }
+
+    async function loadTopology() {
+      const health = await api('/api/v1/health');
+      if (!health.length) { document.getElementById('topology').innerHTML = '<p>无健康数据</p>'; return; }
+      let rows = [];
+      health.forEach(h => {
+        Object.entries(h.latencyMs || {}).forEach(([peer, ms])=>{
+          rows.push({from:h.nodeId,to:peer,latency:ms,loss:(h.packetLoss||{})[peer]||0});
+        });
+      });
+      renderTable(document.getElementById('topology'), [
+        {label:'From', render:r=>r.from},
+        {label:'To', render:r=>r.to},
+        {label:'延迟(ms)', render:r=>r.latency},
+        {label:'丢包(%)', render:r=>r.loss},
+      ], rows);
+      drawGraph(health);
+    }
+
+    function drawGraph(health) {
+      const canvas = document.getElementById('graph');
+      canvas.width = canvas.clientWidth;
+      canvas.height = 400;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const nodes = health.map(h=>h.nodeId);
+      if (!nodes.length) return;
+      const pos = {};
+      const R = Math.min(canvas.width, canvas.height)/2 - 50;
+      nodes.forEach((id, idx)=>{
+        const angle = 2*Math.PI*idx/nodes.length;
+        pos[id] = {
+          x: canvas.width/2 + R*Math.cos(angle),
+          y: canvas.height/2 + R*Math.sin(angle)
+        };
+      });
+      health.forEach(h=>{
+        Object.entries(h.latencyMs||{}).forEach(([peer, ms])=>{
+          if (!pos[h.nodeId] || !pos[peer]) return;
+          const color = ms<30 ? '#6cf2a3' : ms<80 ? '#f2d36c' : '#f26c6c';
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.8;
+          ctx.beginPath();
+          ctx.moveTo(pos[h.nodeId].x, pos[h.nodeId].y);
+          ctx.lineTo(pos[peer].x, pos[peer].y);
+          ctx.stroke();
+          ctx.fillStyle = color;
+          ctx.font = '12px Arial';
+          const mx = (pos[h.nodeId].x + pos[peer].x)/2;
+          const my = (pos[h.nodeId].y + pos[peer].y)/2;
+          ctx.fillText(ms+'ms', mx, my);
+        });
+      });
+      nodes.forEach(id=>{
+        const p = pos[id];
+        ctx.fillStyle = '#2d7df6';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 12, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px Arial';
+        ctx.fillText(id, p.x-10, p.y-16);
+      });
+    }
+
+    async function reloadAll() {
+      try { await loadNodes(); await loadHealth(); await loadAudit(); await loadTopology(); }
+      catch (e) { alert('加载失败: '+e); }
+    }
+    reloadAll();
+
+    function savePlanSnapshot() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId || !lastPlan) { alert('先加载计划'); return; }
+      localStorage.setItem('plan_snapshot_'+nodeId, JSON.stringify(lastPlan));
+      alert('已保存快照');
+    }
+
+    function diffPlan() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId || !lastPlan) { alert('先加载计划'); return; }
+      const saved = localStorage.getItem('plan_snapshot_'+nodeId);
+      if (!saved) { alert('没有快照'); return; }
+      const oldPlan = JSON.parse(saved);
+      const diff = comparePlans(oldPlan, lastPlan);
+      document.getElementById('plan').innerHTML += `<p>新增 peers: ${diff.added.join(', ')||'无'}</p><p>移除 peers: ${diff.removed.join(', ')||'无'}</p>`;
+    }
+
+    function comparePlans(a, b) {
+      const aPeers = new Set((a.wireGuardPeers||[]).map(p=>p.id));
+      const bPeers = new Set((b.wireGuardPeers||[]).map(p=>p.id));
+      const added=[], removed=[];
+      bPeers.forEach(x=>{ if(!aPeers.has(x)) added.push(x); });
+      aPeers.forEach(x=>{ if(!bPeers.has(x)) removed.push(x); });
+      return {added, removed};
+    }
+
+    function renderTimeline() {
+      const el = document.getElementById('planHistory');
+      if (!planHistoryCache.length) { el.innerHTML = '<p>无历史</p>'; return; }
+      let html = '<div>';
+      planHistoryCache.forEach(p=>{
+        html += `<label style="display:block;margin:6px 0;">
+          <input type="radio" name="planVersion" value="${p.version}">
+          v${p.version} | ${p.configVersion} | ${p.createdAt} | peers: ${(p.peers||[]).map(x=>x.id).join(', ')} | sig: ${p.signature? '✓' : '–'}
+        </label>`;
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    }
+  </script>
+</body>
+</html>

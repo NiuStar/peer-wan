@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  agent:
+    image: 24802117/peer-wan-agent:latest
+    container_name: peer-wan-agent
+    environment:
+      - NODE_ID=edge-1
+      - CONTROLLER_ADDR=http://controller:8080
+      - AUTH_TOKEN=${TOKEN:-changeme}
+      - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
+    command:
+      - /app/agent
+      - --id=${NODE_ID:-edge-1}
+      - --pub=stub-pub
+      - --priv=stub-priv
+      - --overlay-ip=10.10.1.1/32
+      - --endpoints=controller:51820
+      - --cidrs=10.10.1.0/24
+      - --asn=65000
+      - --controller=${CONTROLLER_ADDR:-http://controller:8080}
+      - --token=${TOKEN:-changeme}
+      - --health-interval=30s
+      - --plan-interval=30s
