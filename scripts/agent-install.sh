@@ -12,6 +12,9 @@ PLAN_INTERVAL=${PLAN_INTERVAL:-30s}
 APPLY=${APPLY:-true}
 RELEASE_TAG=${RELEASE_TAG:-}
 ARCH=${ARCH:-$(uname -m)}
+SERVICE=${SERVICE:-true}
+PLAN_INTERVAL=${PLAN_INTERVAL:-30s}
+HEALTH_INTERVAL=${HEALTH_INTERVAL:-30s}
 
 if [ -z "${PROVISION_TOKEN}" ]; then
   echo "[peer-wan][error] PROVISION_TOKEN is required (get it from controller UI / 添加节点弹窗)"
@@ -20,6 +23,7 @@ fi
 echo "[peer-wan] CONTROLLER_ADDR=${CONTROLLER_ADDR}"
 echo "[peer-wan] NODE_ID=${NODE_ID}"
 echo "[peer-wan] PROVISION_TOKEN length=$(echo -n "${PROVISION_TOKEN}" | wc -c)"
+echo "[peer-wan] PLAN_INTERVAL=${PLAN_INTERVAL} HEALTH_INTERVAL=${HEALTH_INTERVAL} APPLY=${APPLY} SERVICE=${SERVICE}"
 
 BIN_DIR=${BIN_DIR:-/usr/local/bin}
 mkdir -p "${BIN_DIR}"
@@ -125,3 +129,37 @@ EOF
 chmod +x "${BIN_DIR}/peer-wan-agent"
 echo "[peer-wan] wrapper installed: ${BIN_DIR}/peer-wan-agent"
 echo "[peer-wan] run with: sudo peer-wan-agent"
+
+# install systemd service if available
+if [ "${SERVICE}" = "true" ] && command -v systemctl >/dev/null 2>&1; then
+  SERVICE_FILE=/etc/systemd/system/peer-wan-agent.service
+  echo "[peer-wan] installing systemd service at ${SERVICE_FILE}"
+  cat > "${SERVICE_FILE}" <<EOF
+[Unit]
+Description=peer-wan agent
+After=network.target
+
+[Service]
+Type=simple
+Environment=CONTROLLER_ADDR=${CONTROLLER_ADDR}
+Environment=NODE_ID=${NODE_ID}
+Environment=PROVISION_TOKEN=${PROVISION_TOKEN}
+Environment=TOKEN=${TOKEN}
+Environment=PLAN_INTERVAL=${PLAN_INTERVAL}
+Environment=HEALTH_INTERVAL=${HEALTH_INTERVAL}
+Environment=APPLY=${APPLY}
+ExecStart=${BIN_DIR}/peer-wan-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable peer-wan-agent.service
+  systemctl restart peer-wan-agent.service
+  systemctl status --no-pager peer-wan-agent.service || true
+  echo "[peer-wan] systemd service installed and started."
+else
+  echo "[peer-wan] systemd not installed or SERVICE!=true; skip service install."
+fi
