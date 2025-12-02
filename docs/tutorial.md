@@ -26,7 +26,7 @@ docker compose -f docker-compose.controller.yaml up --build -d
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh \
   && chmod +x /tmp/agent-install.sh \
-  && sudo /tmp/agent-install.sh --controller=https://peerwan.199028.xyz --node-id=edge-1 --provision-token=pt-xxx
+  && sudo /tmp/agent-install.sh --controller=https://peerwan.199028.xyz --node-id=edge-1 --provision-token=pt-xxx --auto-endpoint=true
 ```
 - 参数含义与来源：
   - `NODE_ID`：节点名称（UI 输入）。

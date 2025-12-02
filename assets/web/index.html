@@ -159,6 +159,7 @@
         {label:'ASN', render:r=>r.asn||''},
         {label:'Version', render:r=>r.configVersion||''},
         {label:'安装', render:r=>`<button onclick="showInstall('${r.id}')">安装命令</button>`},
+        {label:'编辑', render:r=>`<button onclick="editNode('${r.id}')">编辑</button>`},
       ], data);
     }
 
@@ -376,6 +377,35 @@
     })();
 
     function arr(v){ return Array.isArray(v)?v:[]; }
+
+    async function editNode(id) {
+      if (!id) { alert('缺少节点 ID'); return; }
+      try {
+        const nodes = arr(await api('/api/v1/nodes'));
+        const node = nodes.find(n=>n.id===id) || {id};
+        const endpoints = prompt('Endpoints (IP:Port，逗号分隔)', (node.endpoints||[]).join(','));
+        if (endpoints===null) return;
+        const cidrs = prompt('CIDRs (逗号分隔)', (node.cidrs||[]).join(','));
+        if (cidrs===null) return;
+        const overlay = prompt('Overlay IP (/32)', node.overlayIp||'');
+        const listen = prompt('Listen Port', node.listenPort||'51820');
+        const pub = prompt('WireGuard 公钥 (若留空使用已有)', node.publicKey||'');
+        const body = {
+          id,
+          publicKey: pub||node.publicKey||'',
+          overlayIp: overlay||node.overlayIp||'',
+          cidrs: (cidrs||'').split(',').map(s=>s.trim()).filter(Boolean),
+          endpoints: (endpoints||'').split(',').map(s=>s.trim()).filter(Boolean),
+          listenPort: parseInt(listen||node.listenPort||'51820',10),
+          force: true
+        };
+        await api('/api/v1/nodes/register', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+        alert('节点已更新');
+        reloadAll();
+      } catch (e) {
+        alert('更新失败: '+e);
+      }
+    }
 
     function savePlanSnapshot() {
       const nodeId = document.getElementById('detailNode').value.trim();
