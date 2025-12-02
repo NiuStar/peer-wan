@@ -151,7 +151,8 @@ func register(client *http.Client, controller, token string, req api.NodeRegistr
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return api.NodeConfigResponse{}, fmt.Errorf("controller returned %s", resp.Status)
+		b, _ := io.ReadAll(resp.Body)
+		return api.NodeConfigResponse{}, fmt.Errorf("controller returned %s body=%s", resp.Status, strings.TrimSpace(string(b)))
 	}
 
 	var cfg api.NodeConfigResponse
