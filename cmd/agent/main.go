@@ -77,6 +77,9 @@ func main() {
 		RouterID:       *routerID,
 		ProvisionToken: *provisionToken,
 	}
+	if *provisionToken != "" && *overlayIP == "10.10.1.1/32" {
+		req.OverlayIP = ""
+	}
 	if *provisionToken != "" && *autoEndpoint {
 		if ep := detectEndpoint(*listenPort); ep != "" {
 			req.Endpoints = []string{ep}

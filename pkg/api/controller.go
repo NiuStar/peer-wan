@@ -113,9 +113,15 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			}
 		}
 
+		// treat placeholder public key as empty so we prefer stored value
+		pub := req.PublicKey
+		if pub == "stub-public-key" {
+			pub = ""
+		}
+
 		node := model.Node{
 			ID:         req.ID,
-			PublicKey:  req.PublicKey,
+			PublicKey:  pub,
 			Endpoints:  req.Endpoints,
 			CIDRs:      req.CIDRs,
 			ListenPort: req.ListenPort,
@@ -132,7 +138,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if node.PrivateKey == "" {
 				node.PrivateKey = existing.PrivateKey
 			}
-			if node.OverlayIP == "" {
+			if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
 				node.OverlayIP = existing.OverlayIP
 			}
 			node.ProvisionToken = existing.ProvisionToken
@@ -159,7 +165,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if node.PrivateKey == "" {
 				node.PrivateKey = existing.PrivateKey
 			}
-			if node.OverlayIP == "" {
+			if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
 				node.OverlayIP = existing.OverlayIP
 			}
 			if node.ListenPort == 0 {
@@ -525,6 +531,10 @@ func agentAuthorized(store store.NodeStore, nodeID, token string) bool {
 		return false
 	}
 	return n.ProvisionToken != "" && n.ProvisionToken == token
+}
+
+func isPlaceholderOverlay(s string) bool {
+	return s == "" || s == "10.10.1.1/32"
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
