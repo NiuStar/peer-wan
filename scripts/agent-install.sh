@@ -182,15 +182,19 @@ echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
 
 cat > "${BIN_DIR}/peer-wan-agent" <<EOF
 #!/usr/bin/env sh
-CONTROLLER_ADDR=${CONTROLLER_ADDR} \\
-TOKEN=${TOKEN} \\
-NODE_ID=${NODE_ID} \\
-PROVISION_TOKEN=${PROVISION_TOKEN} \\
+WRAP_CONTROLLER="${CONTROLLER_ADDR}"
+WRAP_TOKEN="${TOKEN}"
+WRAP_NODE="${NODE_ID}"
+WRAP_PROVISION="${PROVISION_TOKEN}"
+: "\${CONTROLLER_ADDR:=${WRAP_CONTROLLER}}"
+: "\${TOKEN:=${WRAP_TOKEN}}"
+: "\${NODE_ID:=${WRAP_NODE}}"
+: "\${PROVISION_TOKEN:=${WRAP_PROVISION}}"
 ${BIN_DIR}/agent \\
-  --controller="${CONTROLLER_ADDR}" \\
-  --id="${NODE_ID}" \\
-  --provision-token="${PROVISION_TOKEN}" \\
-  --token="${TOKEN}" \\
+  --controller="\${CONTROLLER_ADDR}" \\
+  --id="\${NODE_ID}" \\
+  --provision-token="\${PROVISION_TOKEN}" \\
+  --token="\${TOKEN}" \\
   --auto-endpoint=true \\
   --plan-interval=${PLAN_INTERVAL} \\
   --health-interval=${HEALTH_INTERVAL} \\
