@@ -11,6 +11,7 @@ HEALTH_INTERVAL=${HEALTH_INTERVAL:-30s}
 PLAN_INTERVAL=${PLAN_INTERVAL:-30s}
 APPLY=${APPLY:-true}
 RELEASE_TAG=${RELEASE_TAG:-}
+ARCH=${ARCH:-$(uname -m)}
 
 if [ -z "${PROVISION_TOKEN}" ]; then
   echo "[peer-wan][error] PROVISION_TOKEN is required (get it from controller UI / 添加节点弹窗)"
@@ -44,23 +45,62 @@ if [ -z "${RELEASE_TAG}" ]; then
 fi
 echo "[peer-wan] using release tag: ${RELEASE_TAG}"
 
-DOWNLOAD_URL="https://github.com/NiuStar/peer-wan/releases/download/${RELEASE_TAG}/agent-linux-amd64"
-echo "[peer-wan] downloading agent from ${DOWNLOAD_URL}"
-# download release binary from GitHub with verbose progress
-if command -v curl >/dev/null 2>&1; then
-  if ! curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${TMP_DIR}/agent"; then
-    echo "[peer-wan][error] download failed via curl from ${DOWNLOAD_URL}"
+to_goarch() {
+  case "$1" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    armv7l|armv7) echo "armv7" ;;
+    i386|i686) echo "386" ;;
+    riscv64) echo "riscv64" ;;
+    s390x) echo "s390x" ;;
+    loongarch64) echo "loong64" ;;
+    *) echo "amd64" ;;
+  esac
+}
+
+GOARCH=$(to_goarch "${ARCH}")
+echo "[peer-wan] detected ARCH=${ARCH} -> GOARCH=${GOARCH}"
+
+candidate_names="
+agent-linux-${GOARCH}
+agent-linux_${GOARCH}
+agent-${GOARCH}
+agent_${GOARCH}
+"
+
+download_ok=0
+for name in $candidate_names; do
+  DOWNLOAD_URL="https://github.com/NiuStar/peer-wan/releases/download/${RELEASE_TAG}/${name}"
+  echo "[peer-wan] trying download ${DOWNLOAD_URL}"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${TMP_DIR}/agent"; then
+      download_ok=1
+      echo "[peer-wan] downloaded ${name} via curl"
+      break
+    else
+      echo "[peer-wan][warn] curl failed for ${DOWNLOAD_URL}"
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if wget -O "${TMP_DIR}/agent" "${DOWNLOAD_URL}"; then
+      download_ok=1
+      echo "[peer-wan] downloaded ${name} via wget"
+      break
+    else
+      echo "[peer-wan][warn] wget failed for ${DOWNLOAD_URL}"
+    fi
+  else
+    echo "[peer-wan][error] curl or wget required to download agent"
     exit 1
   fi
-elif command -v wget >/dev/null 2>&1; then
-  if ! wget -O "${TMP_DIR}/agent" "${DOWNLOAD_URL}"; then
-    echo "[peer-wan][error] download failed via wget from ${DOWNLOAD_URL}"
-    exit 1
-  fi
-else
-  echo "[peer-wan][error] curl or wget required to download agent"
+done
+
+if [ "${download_ok}" -ne 1 ]; then
+  echo "[peer-wan][error] download failed for all candidate names. Checked:"
+  echo "${candidate_names}"
+  echo "[peer-wan][hint] verify release ${RELEASE_TAG} assets naming."
   exit 1
 fi
+
 chmod +x "${TMP_DIR}/agent"
 install -m 0755 "${TMP_DIR}/agent" "${BIN_DIR}/agent"
 echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
