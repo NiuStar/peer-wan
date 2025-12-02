@@ -24,7 +24,9 @@ docker compose -f docker-compose.controller.yaml up --build -d
 - 只输入节点 ID，控制器自动生成：WireGuard 公私钥、Overlay IP、ProvisionToken、一键脚本。
 - UI 会弹出脚本并自动复制到剪贴板，例如：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh && chmod +x /tmp/agent-install.sh && sudo CONTROLLER_ADDR=https://peerwan.199028.xyz NODE_ID=edge-1 PROVISION_TOKEN=pt-xxx /tmp/agent-install.sh
+curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh \
+  && chmod +x /tmp/agent-install.sh \
+  && sudo /tmp/agent-install.sh --controller=https://peerwan.199028.xyz --node-id=edge-1 --provision-token=pt-xxx
 ```
 - 参数含义与来源：
   - `NODE_ID`：节点名称（UI 输入）。

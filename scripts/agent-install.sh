@@ -3,6 +3,18 @@ set -e
 
 echo "[peer-wan] bootstrap starting..."
 
+usage() {
+  cat <<EOF
+Usage: $0 [--controller=http://ctrl:8080] [--node-id=edge-1] [--provision-token=pt-xxx]
+          [--token=jwt] [--plan-interval=30s] [--health-interval=30s]
+          [--apply=true|false] [--release-tag=vX.Y.Z] [--proxy=http://host:port]
+          [--no-service] [--no-deps]
+
+Flags override env vars (CONTROLLER_ADDR, NODE_ID, PROVISION_TOKEN, TOKEN, PLAN_INTERVAL, HEALTH_INTERVAL, APPLY, RELEASE_TAG, PROXY, SERVICE, AUTO_INSTALL_DEPS).
+EOF
+}
+
+# defaults
 CONTROLLER_ADDR=${CONTROLLER_ADDR:-http://127.0.0.1:8080}
 TOKEN=${TOKEN:-changeme}
 NODE_ID=${NODE_ID:-edge-1}
@@ -14,6 +26,26 @@ RELEASE_TAG=${RELEASE_TAG:-}
 ARCH=${ARCH:-$(uname -m)}
 SERVICE=${SERVICE:-true}
 AUTO_INSTALL_DEPS=${AUTO_INSTALL_DEPS:-true}
+PROXY=${PROXY:-}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --controller=*) CONTROLLER_ADDR="${1#*=}" ;;
+    --node-id=*|--id=*) NODE_ID="${1#*=}" ;;
+    --provision-token=*) PROVISION_TOKEN="${1#*=}" ;;
+    --token=*) TOKEN="${1#*=}" ;;
+    --plan-interval=*) PLAN_INTERVAL="${1#*=}" ;;
+    --health-interval=*) HEALTH_INTERVAL="${1#*=}" ;;
+    --apply=*) APPLY="${1#*=}" ;;
+    --release-tag=*) RELEASE_TAG="${1#*=}" ;;
+    --proxy=*) PROXY="${1#*=}" ;;
+    --no-service) SERVICE=false ;;
+    --no-deps) AUTO_INSTALL_DEPS=false ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "[peer-wan][warn] unknown flag $1";;
+  esac
+  shift
+done
 
 if [ -z "${PROVISION_TOKEN}" ]; then
   echo "[peer-wan][error] PROVISION_TOKEN is required (get it from controller UI / 添加节点弹窗)"
@@ -30,6 +62,21 @@ TMP_DIR=$(mktemp -d)
 echo "[peer-wan] BIN_DIR=${BIN_DIR}"
 echo "[peer-wan] TMP_DIR=${TMP_DIR}"
 echo "[peer-wan] resolving release tag..."
+
+# optional proxy
+if [ -n "${PROXY}" ]; then
+  export https_proxy="${PROXY}" http_proxy="${PROXY}"
+  echo "[peer-wan] using proxy ${PROXY} for downloads"
+fi
+
+# clean previous service if present
+if [ -f /etc/systemd/system/peer-wan-agent.service ]; then
+  echo "[peer-wan] removing old systemd service"
+  systemctl stop peer-wan-agent.service || true
+  systemctl disable peer-wan-agent.service || true
+  rm -f /etc/systemd/system/peer-wan-agent.service
+  systemctl daemon-reload || true
+fi
 
 # optional dependencies install (wireguard + frr)
 if [ "${AUTO_INSTALL_DEPS}" = "true" ]; then
@@ -52,7 +99,7 @@ if [ -z "${RELEASE_TAG}" ]; then
   if [ "${HTTP_STATUS}" != "200" ]; then
     echo "[peer-wan][error] GitHub API returned ${HTTP_STATUS}, body:"
     cat "${TMP_DIR}/latest.json" 2>/dev/null || true
-    echo "[peer-wan][hint] set RELEASE_TAG=vX.Y.Z manually and retry."
+    echo "[peer-wan][hint] set RELEASE_TAG=vX.Y.Z manually and retry. If behind proxy, set PROXY=http://host:port"
     exit 1
   fi
   RELEASE_TAG=$(grep -m1 '"tag_name"' "${TMP_DIR}/latest.json" | sed -E 's/.*"([^"]+)".*/\1/')

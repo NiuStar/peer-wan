@@ -71,7 +71,7 @@ func RegisterPrepareRoute(mux *http.ServeMux, store store.NodeStore, planVersion
 			return
 		}
 		BumpPlanVersion(planVersion)
-		cmd := fmt.Sprintf(`curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh && chmod +x /tmp/agent-install.sh && sudo CONTROLLER_ADDR=%s NODE_ID=%s PROVISION_TOKEN=%s /tmp/agent-install.sh`,
+		cmd := fmt.Sprintf(`curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh && chmod +x /tmp/agent-install.sh && sudo /tmp/agent-install.sh --controller=%s --node-id=%s --provision-token=%s`,
 			addr, req.ID, token)
 		resp := PrepareResponse{
 			ID:             req.ID,
