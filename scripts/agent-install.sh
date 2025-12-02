@@ -96,16 +96,18 @@ fi
 # resolve release tag
 if [ -z "${RELEASE_TAG}" ]; then
   HTTP_STATUS=$(curl -w "%{http_code}" -fsSL https://api.github.com/repos/NiuStar/peer-wan/releases/latest -o "${TMP_DIR}/latest.json") || HTTP_STATUS=$?
-  if [ "${HTTP_STATUS}" != "200" ]; then
-    echo "[peer-wan][error] GitHub API returned ${HTTP_STATUS}, body:"
-    cat "${TMP_DIR}/latest.json" 2>/dev/null || true
-    echo "[peer-wan][hint] set RELEASE_TAG=vX.Y.Z manually and retry. If behind proxy, set PROXY=http://host:port"
-    exit 1
+  if [ "${HTTP_STATUS}" = "200" ]; then
+    RELEASE_TAG=$(grep -m1 '"tag_name"' "${TMP_DIR}/latest.json" | sed -E 's/.*"([^"]+)".*/\1/')
+  else
+    echo "[peer-wan][warn] GitHub API returned ${HTTP_STATUS}, trying redirect fallback..."
+    FALLBACK_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/NiuStar/peer-wan/releases/latest) || true
+    if echo "${FALLBACK_URL}" | grep -q "/tag/"; then
+      RELEASE_TAG=$(echo "${FALLBACK_URL}" | sed -E 's#.*/tag/([^/]+).*#\1#')
+    fi
   fi
-  RELEASE_TAG=$(grep -m1 '"tag_name"' "${TMP_DIR}/latest.json" | sed -E 's/.*"([^"]+)".*/\1/')
 fi
 if [ -z "${RELEASE_TAG}" ]; then
-  echo "[peer-wan][error] could not resolve release tag; set RELEASE_TAG=vX.Y.Z and retry"
+  echo "[peer-wan][error] could not resolve release tag; set RELEASE_TAG=vX.Y.Z manually. If behind proxy, set PROXY=http://host:port"
   exit 1
 fi
 echo "[peer-wan] using release tag: ${RELEASE_TAG}"
