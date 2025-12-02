@@ -48,6 +48,21 @@
     <h3>状态</h3>
     <div id="status"></div>
   </div>
+  <div id="editModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:2000;">
+    <div style="background:#141426; padding:16px; border-radius:8px; width:360px;">
+      <h3>编辑节点</h3>
+      <div><label>Node ID</label><input id="editId" readonly></div>
+      <div><label>Overlay</label><input id="editOverlay" placeholder="10.10.x.1/32"></div>
+      <div><label>Endpoints</label><input id="editEndpoints" placeholder="ip:port,ip:port"></div>
+      <div><label>CIDRs</label><input id="editCidrs" placeholder="10.10.1.0/24"></div>
+      <div><label>Listen</label><input id="editListen" placeholder="51820"></div>
+      <div><label>PublicKey</label><input id="editPub" placeholder="(可留空保留原值)"></div>
+      <div style="margin-top:10px;">
+        <button onclick="submitEdit()">保存</button>
+        <button class="btn-secondary" onclick="closeEdit()">取消</button>
+      </div>
+    </div>
+  </div>
   <div class="card">
     <h3>节点</h3>
     <div id="nodes"></div>
@@ -159,7 +174,7 @@
         {label:'ASN', render:r=>r.asn||''},
         {label:'Version', render:r=>r.configVersion||''},
         {label:'安装', render:r=>`<button onclick="showInstall('${r.id}')">安装命令</button>`},
-        {label:'编辑', render:r=>`<button onclick="editNode('${r.id}')">编辑</button>`},
+        {label:'编辑', render:r=>`<button onclick="openEdit('${r.id}')">编辑</button>`},
       ], data);
     }
 
@@ -378,29 +393,37 @@
 
     function arr(v){ return Array.isArray(v)?v:[]; }
 
-    async function editNode(id) {
+    async function openEdit(id) {
+      if (!id) return;
+      const nodes = arr(await api('/api/v1/nodes'));
+      const node = nodes.find(n=>n.id===id) || {id};
+      document.getElementById('editId').value = node.id||'';
+      document.getElementById('editOverlay').value = node.overlayIp||'';
+      document.getElementById('editEndpoints').value = (node.endpoints||[]).join(',');
+      document.getElementById('editCidrs').value = (node.cidrs||[]).join(',');
+      document.getElementById('editListen').value = node.listenPort||'51820';
+      document.getElementById('editPub').value = node.publicKey||'';
+      document.getElementById('editModal').style.display = 'flex';
+    }
+    function closeEdit() {
+      document.getElementById('editModal').style.display = 'none';
+    }
+    async function submitEdit() {
+      const id = document.getElementById('editId').value.trim();
       if (!id) { alert('缺少节点 ID'); return; }
+      const body = {
+        id,
+        publicKey: document.getElementById('editPub').value.trim(),
+        overlayIp: document.getElementById('editOverlay').value.trim(),
+        cidrs: document.getElementById('editCidrs').value.split(',').map(s=>s.trim()).filter(Boolean),
+        endpoints: document.getElementById('editEndpoints').value.split(',').map(s=>s.trim()).filter(Boolean),
+        listenPort: parseInt(document.getElementById('editListen').value||'51820',10),
+        force: true,
+      };
       try {
-        const nodes = arr(await api('/api/v1/nodes'));
-        const node = nodes.find(n=>n.id===id) || {id};
-        const endpoints = prompt('Endpoints (IP:Port，逗号分隔)', (node.endpoints||[]).join(','));
-        if (endpoints===null) return;
-        const cidrs = prompt('CIDRs (逗号分隔)', (node.cidrs||[]).join(','));
-        if (cidrs===null) return;
-        const overlay = prompt('Overlay IP (/32)', node.overlayIp||'');
-        const listen = prompt('Listen Port', node.listenPort||'51820');
-        const pub = prompt('WireGuard 公钥 (若留空使用已有)', node.publicKey||'');
-        const body = {
-          id,
-          publicKey: pub||node.publicKey||'',
-          overlayIp: overlay||node.overlayIp||'',
-          cidrs: (cidrs||'').split(',').map(s=>s.trim()).filter(Boolean),
-          endpoints: (endpoints||'').split(',').map(s=>s.trim()).filter(Boolean),
-          listenPort: parseInt(listen||node.listenPort||'51820',10),
-          force: true
-        };
         await api('/api/v1/nodes/register', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
         alert('节点已更新');
+        closeEdit();
         reloadAll();
       } catch (e) {
         alert('更新失败: '+e);

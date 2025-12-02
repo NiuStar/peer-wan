@@ -125,11 +125,43 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		}
 
 		if allowWithoutJWT {
-			// populate from prepared record; agent can optionally override endpoints/CIDRs/listenPort/asn.
-			node.PublicKey = existing.PublicKey
-			node.PrivateKey = existing.PrivateKey
-			node.OverlayIP = existing.OverlayIP
+			// populate from prepared record; agent can override by sending non-empty fields.
+			if node.PublicKey == "" {
+				node.PublicKey = existing.PublicKey
+			}
+			if node.PrivateKey == "" {
+				node.PrivateKey = existing.PrivateKey
+			}
+			if node.OverlayIP == "" {
+				node.OverlayIP = existing.OverlayIP
+			}
 			node.ProvisionToken = existing.ProvisionToken
+			if node.ListenPort == 0 {
+				node.ListenPort = existing.ListenPort
+			}
+			if node.ASN == 0 {
+				node.ASN = existing.ASN
+			}
+			if node.RouterID == "" {
+				node.RouterID = existing.RouterID
+			}
+			if len(node.Endpoints) == 0 {
+				node.Endpoints = existing.Endpoints
+			}
+			if len(node.CIDRs) == 0 {
+				node.CIDRs = existing.CIDRs
+			}
+		} else if ok {
+			// UI/API 编辑路径：合并已有字段，保留未提交的值
+			if node.PublicKey == "" {
+				node.PublicKey = existing.PublicKey
+			}
+			if node.PrivateKey == "" {
+				node.PrivateKey = existing.PrivateKey
+			}
+			if node.OverlayIP == "" {
+				node.OverlayIP = existing.OverlayIP
+			}
 			if node.ListenPort == 0 {
 				node.ListenPort = existing.ListenPort
 			}

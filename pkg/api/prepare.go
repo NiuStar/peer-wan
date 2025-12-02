@@ -88,9 +88,21 @@ func RegisterPrepareRoute(mux *http.ServeMux, store store.NodeStore, planVersion
 
 func assignOverlay(store store.NodeStore) string {
 	nodes, _ := store.ListNodes()
-	n := len(nodes) + 1
-	// naive assignment: 10.10.<n>.1/32
-	return fmt.Sprintf("10.10.%d.1/32", n)
+	used := make(map[int]bool)
+	for _, n := range nodes {
+		ip := ipWithoutMask(n.OverlayIP)
+		var third int
+		if _, err := fmt.Sscanf(ip, "10.10.%d.", &third); err == nil {
+			used[third] = true
+		}
+	}
+	for i := 1; i < 254; i++ {
+		if !used[i] {
+			return fmt.Sprintf("10.10.%d.1/32", i)
+		}
+	}
+	// fallback
+	return "10.10.250.1/32"
 }
 
 func ipWithoutMask(cidr string) string {
