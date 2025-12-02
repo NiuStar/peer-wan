@@ -63,10 +63,17 @@ echo "[peer-wan] BIN_DIR=${BIN_DIR}"
 echo "[peer-wan] TMP_DIR=${TMP_DIR}"
 echo "[peer-wan] resolving release tag..."
 
-# optional proxy
+# optional proxy (prefix mode: PROXY=http://host:port ; final URL becomes $PROXY/https://api.github.com/...)
+proxy_wrap() {
+  url="$1"
+  if [ -n "${PROXY}" ]; then
+    echo "${PROXY}/${url}"
+  else
+    echo "${url}"
+  fi
+}
 if [ -n "${PROXY}" ]; then
-  export https_proxy="${PROXY}" http_proxy="${PROXY}"
-  echo "[peer-wan] using proxy ${PROXY} for downloads"
+  echo "[peer-wan] using proxy prefix ${PROXY} for downloads"
 fi
 
 # clean previous service if present
@@ -95,12 +102,13 @@ fi
 
 # resolve release tag
 if [ -z "${RELEASE_TAG}" ]; then
-  HTTP_STATUS=$(curl -w "%{http_code}" -fsSL https://api.github.com/repos/NiuStar/peer-wan/releases/latest -o "${TMP_DIR}/latest.json") || HTTP_STATUS=$?
+  API_URL=$(proxy_wrap "https://api.github.com/repos/NiuStar/peer-wan/releases/latest")
+  HTTP_STATUS=$(curl -w "%{http_code}" -fsSL "${API_URL}" -o "${TMP_DIR}/latest.json") || HTTP_STATUS=$?
   if [ "${HTTP_STATUS}" = "200" ]; then
     RELEASE_TAG=$(grep -m1 '"tag_name"' "${TMP_DIR}/latest.json" | sed -E 's/.*"([^"]+)".*/\1/')
   else
     echo "[peer-wan][warn] GitHub API returned ${HTTP_STATUS}, trying redirect fallback..."
-    FALLBACK_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/NiuStar/peer-wan/releases/latest) || true
+    FALLBACK_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$(proxy_wrap "https://github.com/NiuStar/peer-wan/releases/latest")") || true
     if echo "${FALLBACK_URL}" | grep -q "/tag/"; then
       RELEASE_TAG=$(echo "${FALLBACK_URL}" | sed -E 's#.*/tag/([^/]+).*#\1#')
     fi
@@ -137,7 +145,7 @@ agent_${GOARCH}
 
 download_ok=0
 for name in $candidate_names; do
-  DOWNLOAD_URL="https://github.com/NiuStar/peer-wan/releases/download/${RELEASE_TAG}/${name}"
+  DOWNLOAD_URL=$(proxy_wrap "https://github.com/NiuStar/peer-wan/releases/download/${RELEASE_TAG}/${name}")
   echo "[peer-wan] trying download ${DOWNLOAD_URL}"
   if command -v curl >/dev/null 2>&1; then
     if curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${TMP_DIR}/agent"; then
