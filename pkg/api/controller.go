@@ -61,6 +61,9 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
+		if req.ProvisionToken == "" {
+			req.ProvisionToken = r.Header.Get("X-Provision-Token")
+		}
 		if req.ID == "" {
 			http.Error(w, "id is required", http.StatusBadRequest)
 			return
