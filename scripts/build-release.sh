@@ -26,9 +26,8 @@ build_one() {
   local outdir="${DIST}/${suffix}"
   mkdir -p "${outdir}"
   echo "Building ${os}/${arch} ${extra_env}"
-  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/controller" "${ROOT}/cmd/controller"
-  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/agent" "${ROOT}/cmd/agent"
-  tar -C "${outdir}" -czf "${DIST}/peer-wan-${suffix}.tar.gz" controller agent
+  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/controller-${suffix}" "${ROOT}/cmd/controller"
+  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/agent-${suffix}" "${ROOT}/cmd/agent"
 }
 
 # Matrix: (os arch extra_env)
@@ -43,13 +42,28 @@ build_one linux loong64 ""
 build_one darwin amd64 ""
 build_one darwin arm64 ""
 
-echo "Uploading assets to GitHub Release ${RELEASE_TAG}"
-ASSETS=("${DIST}"/peer-wan-*.tar.gz)
-
-if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-  gh release upload "${RELEASE_TAG}" "${ASSETS[@]}"
+echo "Preparing Git tag ${RELEASE_TAG}"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git tag -f "${RELEASE_TAG}" || true
+  git push origin "refs/tags/${RELEASE_TAG}" || true
 else
-  gh release create "${RELEASE_TAG}" "${ASSETS[@]}" -t "${RELEASE_TAG}" -n "peer-wan release ${RELEASE_TAG}"
+  echo "Warning: not in a git repo, skipping tag/push. Set GH_REPO to use gh."
 fi
+
+echo "Uploading assets to GitHub Release ${RELEASE_TAG}"
+ASSETS=()
+while IFS= read -r f; do
+  ASSETS+=("$f")
+done < <(find "${DIST}" -type f \( -name 'agent-*' -o -name 'controller-*' \))
+if [ ${#ASSETS[@]} -eq 0 ]; then
+  echo "No built binaries found in ${DIST}"
+  exit 1
+fi
+
+if gh ${GH_REPO:+--repo "$GH_REPO"} release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+  echo "Release ${RELEASE_TAG} exists, deleting and recreating..."
+  gh ${GH_REPO:+--repo "$GH_REPO"} release delete "${RELEASE_TAG}" -y
+fi
+gh ${GH_REPO:+--repo "$GH_REPO"} release create "${RELEASE_TAG}" "${ASSETS[@]}" -t "${RELEASE_TAG}" -n "peer-wan release ${RELEASE_TAG}"
 
 echo "Done. Assets in ${DIST}"

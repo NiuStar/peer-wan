@@ -16,7 +16,7 @@ type BGPConfig struct {
 // - localASN: ASN for this node
 // - neighbors: map of neighbor overlay IP -> ASN (typically same ASN for iBGP)
 // - advertized: list of prefixes to announce
-func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors map[string]int, advertised []string) (BGPConfig, error) {
+func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors map[string]int, advertised []string, plan model.Plan) (BGPConfig, error) {
 	if localASN == 0 {
 		localASN = 65000
 	}
@@ -38,9 +38,34 @@ func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors 
 	for _, pfx := range advertised {
 		fmt.Fprintf(&b, " network %s\n", pfx)
 	}
+	// policy: default route via egress peer overlay, policy rules as static routes
+	if plan.EgressPeerID != "" && len(plan.Peers) > 0 {
+		if nextHop := overlayForPeer(plan.EgressPeerID, plan.Peers); nextHop != "" {
+			fmt.Fprintf(&b, " ip route 0.0.0.0/0 %s\n", nextHop)
+		}
+	}
+	for _, pr := range plan.PolicyRules {
+		if pr.Prefix == "" || pr.ViaNode == "" {
+			continue
+		}
+		if nh := overlayForPeer(pr.ViaNode, plan.Peers); nh != "" {
+			fmt.Fprintf(&b, " ip route %s %s\n", pr.Prefix, nh)
+		}
+	}
 	b.WriteString("!\n")
 
 	return BGPConfig{BGPD: b.String()}, nil
+}
+
+func overlayForPeer(id string, peers []model.Peer) string {
+	for _, p := range peers {
+		if p.ID == id {
+			for _, ip := range p.AllowedIPs {
+				return ip
+			}
+		}
+	}
+	return ""
 }
 
 // NeighborOverlayIPs derives neighbor IPs from peers' AllowedIPs by picking the first entry.

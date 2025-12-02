@@ -7,7 +7,7 @@ services:
     ports:
       - "8500:8500"
     volumes:
-      - consul-data:/consul/data
+      - ./consul-data:/consul/data
   controller:
     image: 24802117/peer-wan-controller:latest
     container_name: peer-wan-controller
@@ -16,6 +16,12 @@ services:
     environment:
       - TOKEN=changeme
       - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
+      - MYSQL_HOST=${MYSQL_HOST:-127.0.0.1}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASS=${MYSQL_PASS:-peerwan}
+      - MYSQL_DB=${MYSQL_DB:-peer_wan}
+      - JWT_SECRET=${JWT_SECRET:-change-me-secret}
     command: ["/app/controller", "--token=${TOKEN:-changeme}", "--store=consul", "--consul-addr=${CONSUL_HTTP_ADDR:-http://consul:8500}"]
     volumes:
       - ./web:/app/web:ro

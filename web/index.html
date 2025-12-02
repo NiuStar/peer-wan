@@ -18,9 +18,26 @@
     .pill.up { background: #173f2f; color: #7cf19c; }
     .pill.down { background: #432020; color: #ff8a8a; }
     #graph { width: 100%; height: 400px; background: #0f0f20; border: 1px solid #2a2a4a; border-radius: 8px; margin-top: 8px; }
+    #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 1000; }
+    #overlay .box { background: #141426; padding: 16px; border-radius: 8px; width: 320px; }
+    #overlay input { width: 100%; margin: 6px 0; }
   </style>
 </head>
 <body>
+  <div id="overlay">
+    <div class="box">
+      <h3 id="overlayTitle">登录</h3>
+      <p id="overlayDesc"></p>
+      <label>API 基址</label>
+      <input id="overlayBase">
+    <label>用户名</label>
+    <input id="overlayUser">
+    <label>密码</label>
+    <input id="overlayPass" type="password">
+    <button onclick="submitOverlay('login')">登录</button>
+    <button class="btn-secondary" onclick="submitOverlay('register')">注册(仅首次)</button>
+  </div>
+</div>
   <h1>peer-wan 控制台</h1>
   <div class="card">
     <label>API 基址</label><input id="base" value="" placeholder="http://127.0.0.1:8080">
@@ -32,6 +49,7 @@
     <div id="nodes"></div>
     <div style="margin-top:8px;">
       <label>Node ID</label><input id="detailNode" placeholder="edge-1" style="width:120px;">
+      <button class="btn-secondary" onclick="showAddNode()">添加节点</button>
       <button onclick="loadPlan()">查看计划</button>
       <button class="btn-secondary" onclick="savePlanSnapshot()">保存快照</button>
       <button class="btn-secondary" onclick="diffPlan()">对比上次快照</button>
@@ -39,8 +57,18 @@
       <button class="btn-secondary" onclick="rollbackPlan()">回滚所选版本</button>
       <button onclick="loadNodeDetail()">查看详情</button>
     </div>
+    <div style="margin-top:8px;">
+      <h4>出口/策略配置</h4>
+      <label>出口 PeerID</label><input id="egressPeer" placeholder="peer-id" style="width:120px;">
+      <label>策略前缀</label><input id="policyPrefix" placeholder="8.8.8.0/24" style="width:150px;">
+      <label>经由节点</label><input id="policyVia" placeholder="peer-id" style="width:120px;">
+      <button class="btn-secondary" onclick="addPolicy()">添加规则</button>
+      <button onclick="submitPolicy()">提交策略</button>
+      <div id="policyList"></div>
+    </div>
     <div id="plan"></div>
     <div id="planHistory"></div>
+    <div id="provisionCmd"></div>
     <div id="nodeDetail"></div>
   </div>
   <div class="card">
@@ -59,19 +87,46 @@
   <script>
     const baseInput = document.getElementById('base');
     const tokenInput = document.getElementById('token');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlayDesc = document.getElementById('overlayDesc');
+    const overlayBase = document.getElementById('overlayBase');
+    const overlayUser = document.getElementById('overlayUser');
+    const overlayPass = document.getElementById('overlayPass');
     const defaultBase = localStorage.getItem('peerwan_base') || window.location.origin || 'http://127.0.0.1:8080';
+    const urlToken = new URLSearchParams(window.location.search).get('token');
+    if (urlToken) { localStorage.setItem('peerwan_token', urlToken); }
     baseInput.value = defaultBase;
     tokenInput.value = localStorage.getItem('peerwan_token') || '';
     let lastPlan = null;
+    let policyRules = [];
+    function showAddNode() {
+      const nodeId = prompt('输入新节点 ID，仅输入名称即可');
+      if (!nodeId) return;
+      const body = {id: nodeId};
+      api('/api/v1/nodes/prepare', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+        .then((resp)=>{
+          const cmd = resp.command || '';
+          const msg = `
+<p>已为 ${resp.id} 生成一键脚本：</p>
+<pre style="white-space:pre-wrap;background:#0f0f20;padding:8px;border-radius:6px;border:1px solid #2a2a4a;">${cmd}</pre>
+<p>Overlay: ${resp.overlayIp} | ProvisionToken: ${resp.provisionToken}</p>`;
+          document.getElementById('provisionCmd').innerHTML = msg;
+          navigator.clipboard?.writeText(cmd).catch(()=>{});
+          alert('已生成脚本并复制到剪贴板，登陆节点执行即可');
+          reloadAll();
+        })
+        .catch(e=>alert('生成失败: '+e));
+    }
 
-    async function api(path) {
+    async function api(path, options={}) {
       const base = baseInput.value.replace(/\/+$/, '');
       const token = tokenInput.value;
       localStorage.setItem('peerwan_base', base);
       localStorage.setItem('peerwan_token', token);
-      const res = await fetch(base + path, {
-        headers: token ? {'X-Auth-Token': token} : {}
-      });
+      const headers = options.headers || {};
+      if (token) headers['Authorization'] = 'Bearer '+token;
+      const res = await fetch(base + path, {...options, headers});
       if (!res.ok) throw new Error(path + ' ' + res.status);
       return res.json();
     }
@@ -131,6 +186,9 @@
       if (!nodeId) { alert('请输入 Node ID'); return; }
       const data = await api('/api/v1/plan?nodeId='+encodeURIComponent(nodeId));
       lastPlan = data;
+      policyRules = data.policyRules || [];
+      document.getElementById('egressPeer').value = data.egressPeerId || '';
+      renderPolicyList();
       let html = `<p>计划版本: ${data.configVersion||''} | 消息: ${data.message||''}</p>`;
       document.getElementById('plan').innerHTML = html;
       renderTable(document.getElementById('plan'), [
@@ -248,7 +306,58 @@
       try { await loadNodes(); await loadHealth(); await loadAudit(); await loadTopology(); }
       catch (e) { alert('加载失败: '+e); }
     }
-    reloadAll();
+    function showOverlay(mode) {
+      overlay.style.display = 'flex';
+      overlayBase.value = baseInput.value;
+      const adminSet = localStorage.getItem('peerwan_admin_set') === 'true';
+      if (!adminSet) {
+        overlayTitle.innerText = '初始化（设置管理员账号）';
+        overlayDesc.innerText = '首次注册的用户将作为管理员，后续仅登录，不再开放注册。';
+      } else {
+        overlayTitle.innerText = '登录';
+        overlayDesc.innerText = '请输入管理员用户名/密码';
+      }
+    }
+    async function submitOverlay(action) {
+      const adminSet = localStorage.getItem('peerwan_admin_set') === 'true';
+      const base = overlayBase.value.replace(/\/+$/, '');
+      const user = overlayUser.value.trim();
+      const pass = overlayPass.value.trim();
+      if (!base || !user || !pass) { alert('请填写完整'); return; }
+      let path = '/api/v1/auth/login';
+      if (!adminSet && action === 'register') path = '/api/v1/auth/register';
+      try {
+        const res = await fetch(base + path, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({username:user, password:pass})
+        });
+        if (!res.ok) { alert('认证失败: '+res.status); return; }
+        const data = await res.json();
+        if (!data.token) { alert('未返回 token'); return; }
+        if (!adminSet && action === 'register') {
+          localStorage.setItem('peerwan_admin_set', 'true');
+        }
+        baseInput.value = base;
+        tokenInput.value = data.token;
+        localStorage.setItem('peerwan_base', base);
+        localStorage.setItem('peerwan_token', data.token);
+        overlay.style.display = 'none';
+        reloadAll();
+      } catch (e) {
+        alert('认证异常: '+e);
+      }
+    }
+    // 首次或未登录时展示登录/初始化
+    (function initAuth(){
+      const adminSet = localStorage.getItem('peerwan_admin_set') === 'true';
+      const savedToken = localStorage.getItem('peerwan_token');
+      if (!adminSet || !savedToken) {
+        showOverlay(adminSet ? 'login' : 'init');
+      } else {
+        reloadAll();
+      }
+    })();
 
     function savePlanSnapshot() {
       const nodeId = document.getElementById('detailNode').value.trim();
@@ -283,11 +392,50 @@
       planHistoryCache.forEach(p=>{
         html += `<label style="display:block;margin:6px 0;">
           <input type="radio" name="planVersion" value="${p.version}">
-          v${p.version} | ${p.configVersion} | ${p.createdAt} | peers: ${(p.peers||[]).map(x=>x.id).join(', ')} | sig: ${p.signature? '✓' : '–'}
+          v${p.version} | ${p.configVersion} | ${p.createdAt} | peers: ${(p.peers||[]).map(x=>x.id).join(', ')} | sig: ${p.signature? '✓' : '–'} | egress: ${p.egressPeerId||''}
         </label>`;
       });
       html += '</div>';
       el.innerHTML = html;
+    }
+
+    function addPolicy() {
+      const prefix = document.getElementById('policyPrefix').value.trim();
+      const via = document.getElementById('policyVia').value.trim();
+      if (!prefix || !via) { alert('请输入前缀和经由节点'); return; }
+      policyRules.push({prefix, viaNode: via});
+      document.getElementById('policyPrefix').value = '';
+      document.getElementById('policyVia').value = '';
+      renderPolicyList();
+    }
+
+    function renderPolicyList() {
+      const el = document.getElementById('policyList');
+      if (!policyRules.length) { el.innerHTML = '<p>无策略规则</p>'; return; }
+      let html = '<ul>';
+      policyRules.forEach((r, idx)=>{ html += `<li>${r.prefix} -> ${r.viaNode} <button class="btn-secondary" onclick="removePolicy(${idx})">删</button></li>`; });
+      html += '</ul>';
+      el.innerHTML = html;
+    }
+
+    function removePolicy(i) {
+      policyRules.splice(i,1);
+      renderPolicyList();
+    }
+
+    async function submitPolicy() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      const egressPeer = document.getElementById('egressPeer').value.trim();
+      const base = baseInput.value.replace(/\/+$/, '');
+      const token = tokenInput.value;
+      const res = await fetch(base + '/api/v1/policy', {
+        method: 'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, token?{'X-Auth-Token':token}:{}),
+        body: JSON.stringify({nodeId, egressPeerId: egressPeer, policyRules})
+      });
+      if (!res.ok) { alert('策略提交失败: '+res.status); return; }
+      alert('策略已提交，等待计划刷新');
     }
   </script>
 </body>

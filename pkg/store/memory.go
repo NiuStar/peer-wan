@@ -165,3 +165,16 @@ func (m *MemoryStore) GetGlobalPlanVersion() (int64, error) {
 	defer m.mu.RUnlock()
 	return m.globalPlanVersion, nil
 }
+
+func (m *MemoryStore) UpdatePolicy(nodeID string, egressPeer string, rules []model.PolicyRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[nodeID]
+	if !ok {
+		return fmt.Errorf("node not found")
+	}
+	n.EgressPeerID = egressPeer
+	n.PolicyRules = rules
+	m.nodes[nodeID] = n
+	return nil
+}

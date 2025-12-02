@@ -31,7 +31,12 @@ func RenderAndWrite(outputDir, iface string, node model.Node, peers []model.Peer
 	if routerID == "" {
 		routerID = node.OverlayIP
 	}
-	bgpConf, err := frr.RenderBGP(asn, routerID, iface, neighbors, node.CIDRs)
+	plan := model.Plan{
+		NodeID:       node.ID,
+		EgressPeerID: node.EgressPeerID,
+		PolicyRules:  node.PolicyRules,
+	}
+	bgpConf, err := frr.RenderBGP(asn, routerID, iface, neighbors, node.CIDRs, plan)
 	if err != nil {
 		return wgPath, "", fmt.Errorf("render bgp: %w", err)
 	}

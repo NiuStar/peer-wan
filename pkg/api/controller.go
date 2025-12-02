@@ -17,8 +17,12 @@ import (
 )
 
 // RegisterRoutes wires the HTTP handlers on the provided mux.
-func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64) {
-	auth := authFunc(token)
+func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64, controllerAddr string) {
+	authHandler := &AuthHandler{DB: dbRef}
+	authHandler.RegisterRoutes(mux)
+	auth := authFuncJWT
+	RegisterPolicyRoutes(mux, store, auth, planVersion)
+	RegisterPrepareRoute(mux, store, planVersion, auth, controllerAddr)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -48,10 +52,6 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 	})
 
 	mux.HandleFunc("/api/v1/nodes/register", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -66,6 +66,21 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			return
 		}
 
+		allowWithoutJWT := req.ProvisionToken != ""
+		if !allowWithoutJWT && !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		existing, ok, _ := store.GetNode(req.ID)
+		if allowWithoutJWT {
+			// provisioning path: validate one-time token and merge controller-assigned fields
+			if !ok || existing.ProvisionToken == "" || existing.ProvisionToken != req.ProvisionToken {
+				http.Error(w, "invalid provision token", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		node := model.Node{
 			ID:         req.ID,
 			PublicKey:  req.PublicKey,
@@ -77,8 +92,36 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			RouterID:   req.RouterID,
 		}
 
+		if allowWithoutJWT {
+			// populate from prepared record; agent can optionally override endpoints/CIDRs/listenPort/asn.
+			node.PublicKey = existing.PublicKey
+			node.PrivateKey = existing.PrivateKey
+			node.OverlayIP = existing.OverlayIP
+			node.ProvisionToken = existing.ProvisionToken
+			if node.ListenPort == 0 {
+				node.ListenPort = existing.ListenPort
+			}
+			if node.ASN == 0 {
+				node.ASN = existing.ASN
+			}
+			if node.RouterID == "" {
+				node.RouterID = existing.RouterID
+			}
+			if len(node.Endpoints) == 0 {
+				node.Endpoints = existing.Endpoints
+			}
+			if len(node.CIDRs) == 0 {
+				node.CIDRs = existing.CIDRs
+			}
+		}
+		if node.RouterID == "" && node.OverlayIP != "" {
+			if idx := strings.Index(node.OverlayIP, "/"); idx > 0 {
+				node.RouterID = node.OverlayIP[:idx]
+			}
+		}
+
 		var saved model.Node
-		if existing, ok, _ := store.GetNode(req.ID); ok && !req.Force && nodeEqual(existing, node) {
+		if ok && !req.Force && nodeEqual(existing, node) {
 			saved = existing
 		} else {
 			var err error
@@ -116,16 +159,21 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			ConfigVersion:  saved.ConfigVersion,
 			WireGuardPeers: peerPlan,
 			Routes:         saved.CIDRs,
+			OverlayIP:      saved.OverlayIP,
+			ListenPort:     saved.ListenPort,
+			ASN:            saved.ASN,
+			RouterID:       saved.RouterID,
+			Endpoints:      saved.Endpoints,
+			PrivateKey:     saved.PrivateKey,
+			PublicKey:      saved.PublicKey,
+			EgressPeerID:   saved.EgressPeerID,
+			PolicyRules:    saved.PolicyRules,
 			Message:        "registered; peer plan derived from currently known nodes",
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
 
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		if r.Method == http.MethodPost {
 			var report model.HealthReport
 			if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
@@ -135,6 +183,10 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			report.Timestamp = time.Now()
 			if report.NodeID == "" {
 				http.Error(w, "nodeId is required", http.StatusBadRequest)
+				return
+			}
+			if !auth(r) && !agentAuthorized(store, report.NodeID, r.Header.Get("X-Provision-Token")) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			if err := store.SaveHealth(report); err != nil {
@@ -186,10 +238,6 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 	})
 
 	mux.HandleFunc("/api/v1/plan", func(w http.ResponseWriter, r *http.Request) {
-		if !auth(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -197,6 +245,10 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		nodeID := r.URL.Query().Get("nodeId")
 		if nodeID == "" {
 			http.Error(w, "nodeId is required", http.StatusBadRequest)
+			return
+		}
+		if !auth(r) && !agentAuthorized(store, nodeID, r.Header.Get("X-Provision-Token")) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		waitStr := r.URL.Query().Get("waitVersion")
@@ -228,12 +280,19 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 				version = "dynamic-v" + itoa(v)
 			}
 		}
-		savePlan(store, model.Node{ID: nodeID, CIDRs: target.CIDRs}, peerPlan, planVersion)
+		savePlan(store, target, peerPlan, planVersion)
 		resp := NodeConfigResponse{
 			ID:             nodeID,
 			ConfigVersion:  version,
 			WireGuardPeers: peerPlan,
 			Routes:         target.CIDRs,
+			OverlayIP:      target.OverlayIP,
+			ListenPort:     target.ListenPort,
+			ASN:            target.ASN,
+			RouterID:       target.RouterID,
+			Endpoints:      target.Endpoints,
+			EgressPeerID:   target.EgressPeerID,
+			PolicyRules:    target.PolicyRules,
 			Message:        "dynamic plan based on current health",
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -391,6 +450,17 @@ func nodeEqual(a, b model.Node) bool {
 		}
 	}
 	return true
+}
+
+func agentAuthorized(store store.NodeStore, nodeID, token string) bool {
+	if nodeID == "" || token == "" {
+		return false
+	}
+	n, ok, err := store.GetNode(nodeID)
+	if err != nil || !ok {
+		return false
+	}
+	return n.ProvisionToken != "" && n.ProvisionToken == token
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

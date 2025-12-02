@@ -9,19 +9,26 @@ import (
 	"context"
 
 	"peer-wan/pkg/api"
+	"peer-wan/pkg/db"
 	"peer-wan/pkg/store"
 )
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
-	token := flag.String("token", "", "bootstrap auth token (optional)")
 	storeType := flag.String("store", "memory", "store backend: memory|consul (requires build tag consul)")
 	consulAddr := flag.String("consul-addr", "127.0.0.1:8500", "consul address (when store=consul)")
 	tlsCert := flag.String("tls-cert", "", "TLS cert path (enables HTTPS if set with --tls-key)")
 	tlsKey := flag.String("tls-key", "", "TLS key path (enables HTTPS if set with --tls-cert)")
 	clientCA := flag.String("client-ca", "", "require and verify client certs using this CA (optional)")
 	lockKey := flag.String("lock-key", "peer-wan/locks/leader", "Consul lock key for leader election")
+	publicAddr := flag.String("public-addr", "", "controller external base URL for agent bootstrap (e.g. https://ctrl.example.com:8080)")
 	flag.Parse()
+
+	dbConn, err := db.Init()
+	if err != nil {
+		log.Fatalf("failed to init db: %v", err)
+	}
+	api.SetDB(dbConn)
 
 	var planVersion int64
 	var nodeStore store.NodeStore
@@ -35,7 +42,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	api.RegisterRoutes(mux, nodeStore, *token, &planVersion)
+	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr)
 	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("web"))))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,7 +86,6 @@ func main() {
 	}
 
 	log.Printf("controller listening on %s", *addr)
-	var err error
 	if *tlsCert != "" && *tlsKey != "" {
 		if *clientCA != "" {
 			cfg, errTLS := api.ServerTLSConfig(*tlsCert, *tlsKey, *clientCA)

@@ -14,6 +14,7 @@ type NodeStore interface {
 	RollbackPlan(nodeID string, version int64) (model.Plan, error)
 	SetGlobalPlanVersion(int64) error
 	GetGlobalPlanVersion() (int64, error)
+	UpdatePolicy(nodeID string, egressPeer string, rules []model.PolicyRule) error
 	SaveHealth(model.HealthReport) error
 	ListHealth() ([]model.HealthReport, error)
 	AppendAudit(model.AuditEntry) error

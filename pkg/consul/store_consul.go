@@ -19,6 +19,12 @@ type Store struct {
 	session *consulapi.Session
 }
 
+type nodeRecord struct {
+	model.Node
+	PrivateKey     string `json:"privateKey,omitempty"`
+	ProvisionToken string `json:"provisionToken,omitempty"`
+}
+
 const (
 	nodePrefix   = "peer-wan/nodes/"
 	healthPrefix = "peer-wan/health/"
@@ -40,7 +46,8 @@ func (s *Store) UpsertNode(n model.Node) (model.Node, error) {
 	if s.cli == nil {
 		return n, fmt.Errorf("consul client not configured")
 	}
-	b, err := json.Marshal(n)
+	rec := nodeRecord{Node: n, PrivateKey: n.PrivateKey, ProvisionToken: n.ProvisionToken}
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return n, err
 	}
@@ -61,8 +68,11 @@ func (s *Store) ListNodes() ([]model.Node, error) {
 	}
 	var out []model.Node
 	for _, p := range pairs {
-		var n model.Node
-		if err := json.Unmarshal(p.Value, &n); err == nil {
+		var rec nodeRecord
+		if err := json.Unmarshal(p.Value, &rec); err == nil {
+			n := rec.Node
+			n.PrivateKey = rec.PrivateKey
+			n.ProvisionToken = rec.ProvisionToken
 			out = append(out, n)
 		}
 	}
@@ -77,10 +87,13 @@ func (s *Store) GetNode(id string) (model.Node, bool, error) {
 	if err != nil || kv == nil {
 		return model.Node{}, false, err
 	}
-	var n model.Node
-	if err := json.Unmarshal(kv.Value, &n); err != nil {
+	var rec nodeRecord
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
 		return model.Node{}, false, err
 	}
+	n := rec.Node
+	n.PrivateKey = rec.PrivateKey
+	n.ProvisionToken = rec.ProvisionToken
 	return n, true, nil
 }
 
@@ -236,6 +249,31 @@ func (s *Store) GetGlobalPlanVersion() (int64, error) {
 	var v int64
 	_, _ = fmt.Sscanf(string(kv.Value), "%d", &v)
 	return v, nil
+}
+
+func (s *Store) UpdatePolicy(nodeID string, egressPeer string, rules []model.PolicyRule) error {
+	if s.cli == nil {
+		return fmt.Errorf("consul client not configured")
+	}
+	nodeKV, _, err := s.cli.KV().Get(nodePrefix+nodeID, nil)
+	if err != nil {
+		return err
+	}
+	if nodeKV == nil {
+		return fmt.Errorf("node not found")
+	}
+	var n model.Node
+	if err := json.Unmarshal(nodeKV.Value, &n); err != nil {
+		return err
+	}
+	n.EgressPeerID = egressPeer
+	n.PolicyRules = rules
+	b, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	_, err = s.cli.KV().Put(&consulapi.KVPair{Key: nodePrefix + nodeID, Value: b}, nil)
+	return err
 }
 
 func (s *Store) ListAudit(limit int) ([]model.AuditEntry, error) {

@@ -16,7 +16,7 @@ import (
 
 // StartHealthReporter launches a goroutine to periodically probe peers and report health.
 // If interval <=0, it is a no-op. Ping is best-effort and tolerant to failures.
-func StartHealthReporter(client *http.Client, controller, token, nodeID string, peers []model.Peer, interval time.Duration) {
+func StartHealthReporter(client *http.Client, controller, authToken, provisionToken, nodeID string, peers []model.Peer, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
@@ -24,7 +24,7 @@ func StartHealthReporter(client *http.Client, controller, token, nodeID string, 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			if err := reportOnce(client, controller, token, nodeID, peers); err != nil {
+			if err := reportOnce(client, controller, authToken, provisionToken, nodeID, peers); err != nil {
 				log.Printf("health report failed: %v", err)
 			}
 			<-ticker.C
@@ -32,7 +32,7 @@ func StartHealthReporter(client *http.Client, controller, token, nodeID string, 
 	}()
 }
 
-func reportOnce(client *http.Client, controller, token, nodeID string, peers []model.Peer) error {
+func reportOnce(client *http.Client, controller, authToken, provisionToken, nodeID string, peers []model.Peer) error {
 	latency := map[string]int{}
 	loss := map[string]float64{}
 	for _, p := range peers {
@@ -55,7 +55,7 @@ func reportOnce(client *http.Client, controller, token, nodeID string, peers []m
 		PacketLoss: loss,
 		FRRState:   frrState,
 	}
-	return postJSON(client, controller+"/api/v1/health", token, report)
+	return postJSON(client, controller+"/api/v1/health", authToken, provisionToken, report)
 }
 
 func peerOverlayIP(p model.Peer) string {

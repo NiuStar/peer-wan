@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"peer-wan/pkg/agent"
@@ -25,6 +27,7 @@ func main() {
 	}
 	defaultToken := os.Getenv("AUTH_TOKEN")
 	defaultCA := os.Getenv("CA_FILE")
+	defaultProvision := os.Getenv("PROVISION_TOKEN")
 
 	nodeID := flag.String("id", defaultID, "node id (overrides NODE_ID env)")
 	publicKey := flag.String("pub", "stub-public-key", "wireguard public key (placeholder)")
@@ -46,6 +49,8 @@ func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS verify for controller (not recommended)")
 	healthInterval := flag.Duration("health-interval", 0, "if >0, agent probes peers and posts /health (e.g., 30s)")
 	planInterval := flag.Duration("plan-interval", 0, "if >0, poll controller plan and re-render/apply on change (e.g., 30s)")
+	provisionToken := flag.String("provision-token", defaultProvision, "one-time provision token from controller (env PROVISION_TOKEN)")
+	autoEndpoint := flag.Bool("auto-endpoint", true, "auto-detect endpoint when provision-token is set")
 	flag.Parse()
 
 	if *nodeID == "" {
@@ -55,20 +60,26 @@ func main() {
 		log.Fatal("controller base URL is required")
 	}
 
-	req := api.NodeRegistrationRequest{
-		ID:         *nodeID,
-		PublicKey:  *publicKey,
-		Endpoints:  splitAndTrim(*endpoints),
-		CIDRs:      splitAndTrim(*cidrs),
-		OverlayIP:  *overlayIP,
-		ListenPort: *listenPort,
-		ASN:        *asn,
-		RouterID:   *routerID,
-	}
-
 	client, err := buildHTTPClient(*caFile, *clientCert, *clientKey, *insecure)
 	if err != nil {
 		log.Fatalf("http client build failed: %v", err)
+	}
+
+	req := api.NodeRegistrationRequest{
+		ID:             *nodeID,
+		PublicKey:      *publicKey,
+		Endpoints:      splitAndTrim(*endpoints),
+		CIDRs:          splitAndTrim(*cidrs),
+		OverlayIP:      *overlayIP,
+		ListenPort:     *listenPort,
+		ASN:            *asn,
+		RouterID:       *routerID,
+		ProvisionToken: *provisionToken,
+	}
+	if *provisionToken != "" && *autoEndpoint {
+		if ep := detectEndpoint(*listenPort); ep != "" {
+			req.Endpoints = []string{ep}
+		}
 	}
 
 	cfg, err := register(client, *controller, *authToken, req)
@@ -76,15 +87,21 @@ func main() {
 		log.Fatalf("register failed: %v", err)
 	}
 
+	selectedOverlay := firstNonEmpty(cfg.OverlayIP, *overlayIP)
+	selectedListen := chooseInt(cfg.ListenPort, *listenPort)
+	selectedASN := chooseInt(cfg.ASN, *asn)
+	selectedRouterID := firstNonEmpty(cfg.RouterID, *routerID, ipFromCIDR(selectedOverlay))
+	selectedPriv := firstNonEmpty(cfg.PrivateKey, *privateKey)
+
 	node := model.Node{
 		ID:         cfg.ID,
 		CIDRs:      cfg.Routes,
-		OverlayIP:  *overlayIP,
-		ListenPort: *listenPort,
-		ASN:        *asn,
-		RouterID:   *routerID,
+		OverlayIP:  selectedOverlay,
+		ListenPort: selectedListen,
+		ASN:        selectedASN,
+		RouterID:   selectedRouterID,
 	}
-	wgPath, bgpPath, err := agent.RenderAndWrite(*outputDir, *iface, node, cfg.WireGuardPeers, *privateKey, *asn)
+	wgPath, bgpPath, err := agent.RenderAndWrite(*outputDir, *iface, node, cfg.WireGuardPeers, selectedPriv, selectedASN)
 	if err != nil {
 		log.Fatalf("render/apply failed: %v", err)
 	}
@@ -97,11 +114,11 @@ func main() {
 	}
 
 	if *healthInterval > 0 {
-		agent.StartHealthReporter(client, *controller, *authToken, cfg.ID, cfg.WireGuardPeers, *healthInterval)
+		agent.StartHealthReporter(client, *controller, *authToken, *provisionToken, cfg.ID, cfg.WireGuardPeers, *healthInterval)
 	}
 
 	if *planInterval > 0 {
-		agent.StartPlanPoller(client, *controller, *authToken, cfg.ID, node, *iface, *outputDir, *privateKey, *asn, *apply, *planInterval)
+		agent.StartPlanPoller(client, *controller, *authToken, *provisionToken, cfg.ID, node, *iface, *outputDir, selectedPriv, selectedASN, *apply, *planInterval)
 	}
 
 	if *healthInterval > 0 || *planInterval > 0 {
@@ -122,7 +139,10 @@ func register(client *http.Client, controller, token string, req api.NodeRegistr
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if token != "" {
-		httpReq.Header.Set("X-Auth-Token", token)
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+	}
+	if req.ProvisionToken != "" {
+		httpReq.Header.Set("X-Provision-Token", req.ProvisionToken)
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -183,4 +203,44 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return out
+}
+
+func detectEndpoint(listenPort int) string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+		return fmt.Sprintf("%s:%d", addr.IP.String(), listenPort)
+	}
+	return ""
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func chooseInt(candidates ...int) int {
+	for _, v := range candidates {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func ipFromCIDR(cidr string) string {
+	if cidr == "" {
+		return ""
+	}
+	if i := strings.Index(cidr, "/"); i > 0 {
+		return cidr[:i]
+	}
+	return cidr
 }
