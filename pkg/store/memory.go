@@ -68,6 +68,9 @@ func (m *MemoryStore) LeaderGuard(ctx context.Context, _ string, _ time.Duration
 	}
 }
 
+// Ping reports readiness for health/info endpoints.
+func (m *MemoryStore) Ping() error { return nil }
+
 func versionString(v int) string {
 	return "v0.0." + strconv.Itoa(v)
 }

@@ -42,6 +42,15 @@ func NewStore(addr string) *Store {
 	return &Store{cli: cli, session: cli.Session()}
 }
 
+// Ping checks consul leader status to ensure connectivity.
+func (s *Store) Ping() error {
+	if s.cli == nil {
+		return fmt.Errorf("consul client not configured")
+	}
+	_, err := s.cli.Status().Leader()
+	return err
+}
+
 func (s *Store) UpsertNode(n model.Node) (model.Node, error) {
 	if s.cli == nil {
 		return n, fmt.Errorf("consul client not configured")

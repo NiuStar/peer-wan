@@ -3,7 +3,7 @@ services:
   consul:
     image: hashicorp/consul:1.17
     container_name: consul
-    command: ["agent", "-dev", "-ui", "-client=0.0.0.0", "-data-dir=/consul/data"]
+    command: ["agent", "-server", "-bootstrap-expect=1", "-ui", "-client=0.0.0.0", "-data-dir=/consul/data"]
     ports:
       - "8500:8500"
     volumes:
@@ -14,15 +14,22 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - TOKEN=changeme
-      - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
-      - MYSQL_HOST=${MYSQL_HOST:-127.0.0.1}
-      - MYSQL_PORT=${MYSQL_PORT:-3306}
-      - MYSQL_USER=${MYSQL_USER:-root}
-      - MYSQL_PASS=${MYSQL_PASS:-peerwan}
-      - MYSQL_DB=${MYSQL_DB:-peer_wan}
-      - JWT_SECRET=${JWT_SECRET:-change-me-secret}
-    command: ["/app/controller", "--token=${TOKEN:-changeme}", "--store=consul", "--consul-addr=${CONSUL_HTTP_ADDR:-http://consul:8500}"]
+      STORE: consul
+      CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-http://consul:8500}
+      TOKEN: ${TOKEN:-changeme}
+      MYSQL_HOST: ${MYSQL_HOST:-127.0.0.1}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASS: ${MYSQL_PASS:-peerwan}
+      MYSQL_DB: ${MYSQL_DB:-peer_wan}
+      JWT_SECRET: ${JWT_SECRET:-change-me-secret}
+      PUBLIC_ADDR: ${PUBLIC_ADDR:-http://127.0.0.1:8080}
+    command: >
+      /app/controller
+      --store=consul
+      --consul-addr=${CONSUL_HTTP_ADDR:-http://consul:8500}
+      --public-addr=${PUBLIC_ADDR:-http://127.0.0.1:8080}
+      --token=${TOKEN:-changeme}
     volumes:
       - ./web:/app/web:ro
     depends_on:

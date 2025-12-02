@@ -17,7 +17,7 @@ import (
 )
 
 // RegisterRoutes wires the HTTP handlers on the provided mux.
-func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64, controllerAddr string) {
+func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64, controllerAddr, storeType, consulAddr string) {
 	authHandler := &AuthHandler{DB: dbRef}
 	authHandler.RegisterRoutes(mux)
 	auth := authFuncJWT
@@ -32,6 +32,35 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	mux.HandleFunc("/api/v1/info", func(w http.ResponseWriter, _ *http.Request) {
+		info := map[string]interface{}{
+			"store":       storeType,
+			"consulAddr":  consulAddr,
+			"publicAddr":  controllerAddr,
+			"planVersion": atomic.LoadInt64(planVersion),
+		}
+		if dbRef != nil {
+			sqlDB, err := dbRef.DB()
+			if err == nil {
+				if errPing := sqlDB.Ping(); errPing == nil {
+					info["mysql"] = "ok"
+				} else {
+					info["mysql"] = errPing.Error()
+				}
+			} else {
+				info["mysql"] = err.Error()
+			}
+		}
+		if pinger, ok := store.(interface{ Ping() error }); ok {
+			if err := pinger.Ping(); err != nil {
+				info["storeStatus"] = err.Error()
+			} else {
+				info["storeStatus"] = "ok"
+			}
+		}
+		writeJSON(w, http.StatusOK, info)
 	})
 
 	mux.HandleFunc("/api/v1/nodes", func(w http.ResponseWriter, r *http.Request) {

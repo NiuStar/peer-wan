@@ -45,6 +45,10 @@
     <button onclick="reloadAll()">刷新</button>
   </div>
   <div class="card">
+    <h3>状态</h3>
+    <div id="status"></div>
+  </div>
+  <div class="card">
     <h3>节点</h3>
     <div id="nodes"></div>
     <div style="margin-top:8px;">
@@ -132,7 +136,7 @@
     }
 
     function renderTable(el, columns, rows) {
-      if (!rows.length) { el.innerHTML = '<p>无数据</p>'; return; }
+      if (!rows || !rows.length) { el.innerHTML = '<p>无数据</p>'; return; }
       let html = '<table><thead><tr>';
       columns.forEach(c => html += `<th>${c.label}</th>`);
       html += '</tr></thead><tbody>';
@@ -146,7 +150,7 @@
     }
 
     async function loadNodes() {
-      const data = await api('/api/v1/nodes');
+      const data = arr(await api('/api/v1/nodes'));
       renderTable(document.getElementById('nodes'), [
         {label:'ID', render:r=>r.id},
         {label:'Endpoints', render:r=>(r.endpoints||[]).join(', ')},
@@ -154,11 +158,12 @@
         {label:'Overlay', render:r=>r.overlayIp||''},
         {label:'ASN', render:r=>r.asn||''},
         {label:'Version', render:r=>r.configVersion||''},
+        {label:'安装', render:r=>`<button onclick="showInstall('${r.id}')">安装命令</button>`},
       ], data);
     }
 
     async function loadHealth() {
-      const data = await api('/api/v1/health');
+      const data = arr(await api('/api/v1/health'));
       renderTable(document.getElementById('health'), [
         {label:'Node', render:r=>r.nodeId},
         {label:'状态', render:r=>`<span class="pill ${r.status==='down'?'down':'up'}">${r.status||'unknown'}</span>`},
@@ -171,7 +176,7 @@
     }
 
     async function loadAudit() {
-      const data = await api('/api/v1/audit');
+      const data = arr(await api('/api/v1/audit'));
       renderTable(document.getElementById('audit'), [
         {label:'时间', render:r=>r.timestamp},
         {label:'操作者', render:r=>r.actor},
@@ -229,7 +234,7 @@
     async function loadNodeDetail() {
       const nodeId = document.getElementById('detailNode').value.trim();
       if (!nodeId) { alert('请输入 Node ID'); return; }
-      const health = await api('/api/v1/health');
+      const health = arr(await api('/api/v1/health'));
       const h = (health||[]).find(x=>x.nodeId===nodeId);
       if (!h) { document.getElementById('nodeDetail').innerHTML = '<p>无健康数据</p>'; return; }
       let html = '<p><b>延迟</b>: '+JSON.stringify(h.latencyMs||{})+'</p>';
@@ -239,8 +244,8 @@
     }
 
     async function loadTopology() {
-      const health = await api('/api/v1/health');
-      if (!health.length) { document.getElementById('topology').innerHTML = '<p>无健康数据</p>'; return; }
+      const health = arr(await api('/api/v1/health'));
+      if (!health.length) { document.getElementById('topology').innerHTML = '<p>无健康数据</p>'; drawGraph([]); return; }
       let rows = [];
       health.forEach(h => {
         Object.entries(h.latencyMs || {}).forEach(([peer, ms])=>{
@@ -303,8 +308,19 @@
     }
 
     async function reloadAll() {
-      try { await loadNodes(); await loadHealth(); await loadAudit(); await loadTopology(); }
+      try { await loadStatus(); await loadNodes(); await loadHealth(); await loadAudit(); await loadTopology(); }
       catch (e) { alert('加载失败: '+e); }
+    }
+    async function loadStatus() {
+      const data = await api('/api/v1/info');
+      const el = document.getElementById('status');
+      el.innerHTML = `
+        <p>Store: ${data.store} (${data.storeStatus||'unknown'})</p>
+        <p>Consul: ${data.consulAddr||'-'}</p>
+        <p>MySQL: ${data.mysql||'-'}</p>
+        <p>PublicAddr: ${data.publicAddr||'-'}</p>
+        <p>PlanVersion: ${data.planVersion||0}</p>
+      `;
     }
     function showOverlay(mode) {
       overlay.style.display = 'flex';
@@ -359,6 +375,8 @@
       }
     })();
 
+    function arr(v){ return Array.isArray(v)?v:[]; }
+
     function savePlanSnapshot() {
       const nodeId = document.getElementById('detailNode').value.trim();
       if (!nodeId || !lastPlan) { alert('先加载计划'); return; }
@@ -383,6 +401,27 @@
       bPeers.forEach(x=>{ if(!aPeers.has(x)) added.push(x); });
       aPeers.forEach(x=>{ if(!bPeers.has(x)) removed.push(x); });
       return {added, removed};
+    }
+
+    async function showInstall(id) {
+      if (!id) { alert('缺少节点 ID'); return; }
+      try {
+        const resp = await api('/api/v1/nodes/prepare', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id})
+        });
+        const cmd = resp.command || '';
+        document.getElementById('provisionCmd').innerHTML = `
+          <p>节点 ${id} 安装命令：</p>
+          <pre style="white-space:pre-wrap;background:#0f0f20;padding:8px;border-radius:6px;border:1px solid #2a2a4a;">${cmd}</pre>
+          <p>Overlay: ${resp.overlayIp} | ProvisionToken: ${resp.provisionToken}</p>
+        `;
+        navigator.clipboard?.writeText(cmd).catch(()=>{});
+        alert('已生成安装命令，已复制到剪贴板');
+      } catch (e) {
+        alert('生成命令失败: '+e);
+      }
     }
 
     function renderTimeline() {

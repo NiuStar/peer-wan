@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
-	"context"
-
+	"peer-wan/assets"
 	"peer-wan/pkg/api"
 	"peer-wan/pkg/db"
 	"peer-wan/pkg/store"
@@ -15,13 +17,13 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
-	storeType := flag.String("store", "memory", "store backend: memory|consul (requires build tag consul)")
-	consulAddr := flag.String("consul-addr", "127.0.0.1:8500", "consul address (when store=consul)")
+	storeType := flag.String("store", getenv("STORE", "memory"), "store backend: memory|consul (requires build tag consul)")
+	consulAddr := flag.String("consul-addr", getenv("CONSUL_HTTP_ADDR", "127.0.0.1:8500"), "consul address (when store=consul)")
 	tlsCert := flag.String("tls-cert", "", "TLS cert path (enables HTTPS if set with --tls-key)")
 	tlsKey := flag.String("tls-key", "", "TLS key path (enables HTTPS if set with --tls-cert)")
 	clientCA := flag.String("client-ca", "", "require and verify client certs using this CA (optional)")
 	lockKey := flag.String("lock-key", "peer-wan/locks/leader", "Consul lock key for leader election")
-	publicAddr := flag.String("public-addr", "", "controller external base URL for agent bootstrap (e.g. https://ctrl.example.com:8080)")
+	publicAddr := flag.String("public-addr", getenv("PUBLIC_ADDR", ""), "controller external base URL for agent bootstrap (e.g. https://ctrl.example.com:8080)")
 	flag.Parse()
 
 	dbConn, err := db.Init()
@@ -40,10 +42,16 @@ func main() {
 	default:
 		log.Fatalf("unsupported store type: %s", *storeType)
 	}
+	log.Printf("starting controller store=%s consul=%s publicAddr=%s", *storeType, *consulAddr, *publicAddr)
 
 	mux := http.NewServeMux()
-	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr)
-	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("web"))))
+	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr, *storeType, *consulAddr)
+
+	uiFS, err := fs.Sub(assets.UI, "web")
+	if err != nil {
+		log.Fatalf("failed to load embedded ui: %v", err)
+	}
+	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(uiFS))))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -103,4 +111,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

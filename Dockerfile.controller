@@ -7,6 +7,5 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=consul -o /app/bin/cont
 FROM alpine:3.18
 WORKDIR /app
 COPY --from=builder /app/bin/controller /app/controller
-COPY --from=builder /app/web /app/web
 EXPOSE 8080
 ENTRYPOINT ["/app/controller"]

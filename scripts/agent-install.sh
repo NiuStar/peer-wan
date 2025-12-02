@@ -13,8 +13,7 @@ APPLY=${APPLY:-true}
 RELEASE_TAG=${RELEASE_TAG:-}
 ARCH=${ARCH:-$(uname -m)}
 SERVICE=${SERVICE:-true}
-PLAN_INTERVAL=${PLAN_INTERVAL:-30s}
-HEALTH_INTERVAL=${HEALTH_INTERVAL:-30s}
+AUTO_INSTALL_DEPS=${AUTO_INSTALL_DEPS:-true}
 
 if [ -z "${PROVISION_TOKEN}" ]; then
   echo "[peer-wan][error] PROVISION_TOKEN is required (get it from controller UI / 添加节点弹窗)"
@@ -31,6 +30,21 @@ TMP_DIR=$(mktemp -d)
 echo "[peer-wan] BIN_DIR=${BIN_DIR}"
 echo "[peer-wan] TMP_DIR=${TMP_DIR}"
 echo "[peer-wan] resolving release tag..."
+
+# optional dependencies install (wireguard + frr)
+if [ "${AUTO_INSTALL_DEPS}" = "true" ]; then
+  echo "[peer-wan] installing dependencies (wireguard/frr) if possible..."
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update && sudo apt-get install -y wireguard wireguard-tools frr || echo "[peer-wan][warn] apt install failed, please install wireguard/frr manually"
+  elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y epel-release || true
+    sudo yum install -y wireguard-tools frr || echo "[peer-wan][warn] yum install failed, please install wireguard/frr manually"
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y wireguard-tools frr || echo "[peer-wan][warn] dnf install failed, please install wireguard/frr manually"
+  else
+    echo "[peer-wan][warn] unknown package manager, please install wireguard/frr manually"
+  fi
+fi
 
 # resolve release tag
 if [ -z "${RELEASE_TAG}" ]; then
