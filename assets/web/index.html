@@ -63,6 +63,32 @@
       </div>
     </div>
   </div>
+  <div id="peerModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:2000;">
+    <div style="background:#141426; padding:16px; border-radius:8px; width:420px; max-height:80vh; overflow:auto;">
+      <h3>对端 Endpoint 选择</h3>
+      <p id="peerTitle"></p>
+      <div id="peerList"></div>
+      <div style="margin-top:10px;">
+        <button onclick="submitPeerConfig()">保存</button>
+        <button class="btn-secondary" onclick="closePeerConfig()">取消</button>
+      </div>
+    </div>
+  </div>
+  <div id="editModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:2000;">
+    <div style="background:#141426; padding:16px; border-radius:8px; width:360px;">
+      <h3>编辑节点</h3>
+      <div><label>Node ID</label><input id="editId" readonly></div>
+      <div><label>Overlay</label><input id="editOverlay" placeholder="10.10.x.1/32"></div>
+      <div><label>Endpoints</label><input id="editEndpoints" placeholder="ip:port,ip:port"></div>
+      <div><label>CIDRs</label><input id="editCidrs" placeholder="10.10.1.0/24"></div>
+      <div><label>Listen</label><input id="editListen" placeholder="51820"></div>
+      <div><label>PublicKey</label><input id="editPub" placeholder="(可留空保留原值)"></div>
+      <div style="margin-top:10px;">
+        <button onclick="submitEdit()">保存</button>
+        <button class="btn-secondary" onclick="closeEdit()">取消</button>
+      </div>
+    </div>
+  </div>
   <div class="card">
     <h3>节点</h3>
     <div id="nodes"></div>
@@ -75,6 +101,7 @@
       <button class="btn-secondary" onclick="loadPlanHistory()">加载历史</button>
       <button class="btn-secondary" onclick="rollbackPlan()">回滚所选版本</button>
       <button onclick="loadNodeDetail()">查看详情</button>
+      <button class="btn-secondary" onclick="diagnosePlan()">诊断计划</button>
     </div>
     <div style="margin-top:8px;">
       <h4>出口/策略配置</h4>
@@ -119,6 +146,7 @@
     tokenInput.value = localStorage.getItem('peerwan_token') || '';
     let lastPlan = null;
     let policyRules = [];
+    let peerConfigCache = {};
     function showAddNode() {
       const nodeId = prompt('输入新节点 ID，仅输入名称即可');
       if (!nodeId) return;
@@ -146,7 +174,13 @@
       const headers = options.headers || {};
       if (token) headers['Authorization'] = 'Bearer '+token;
       const res = await fetch(base + path, {...options, headers});
-      if (!res.ok) throw new Error(path + ' ' + res.status);
+      if (!res.ok) {
+        if (res.status === 401) {
+          showOverlay('login');
+          throw new Error(path + ' unauthorized');
+        }
+        throw new Error(path + ' ' + res.status);
+      }
       return res.json();
     }
 
@@ -175,6 +209,7 @@
         {label:'Version', render:r=>r.configVersion||''},
         {label:'安装', render:r=>`<button onclick="showInstall('${r.id}')">安装命令</button>`},
         {label:'编辑', render:r=>`<button onclick="openEdit('${r.id}')">编辑</button>`},
+        {label:'对端Endpoint', render:r=>`<button onclick="openPeerConfig('${r.id}')">配置</button>`},
       ], data);
     }
 
@@ -238,7 +273,7 @@
       const token = tokenInput.value;
       const res = await fetch(base + '/api/v1/plan/rollback', {
         method: 'POST',
-        headers: Object.assign({'Content-Type':'application/json'}, token?{'X-Auth-Token':token}:{}),
+        headers: Object.assign({'Content-Type':'application/json'}, token?{'Authorization':'Bearer '+token}:{}),
         body: JSON.stringify({nodeId, version:vNum})
       });
       if (!res.ok) { alert('回滚失败: '+res.status); return; }
@@ -394,6 +429,53 @@
 
     function arr(v){ return Array.isArray(v)?v:[]; }
 
+    async function openPeerConfig(id) {
+      if (!id) return;
+      const nodes = arr(await api('/api/v1/nodes'));
+      const node = nodes.find(n=>n.id===id) || {id};
+      peerConfigCache = {nodeId:id, nodes};
+      document.getElementById('peerTitle').innerText = `为 ${id} 选择对端 Endpoint`;
+      const list = document.getElementById('peerList');
+      let html = '';
+      nodes.forEach(n=>{
+        if (n.id === id) return;
+        const eps = arr(n.endpoints);
+        const current = (node.peerEndpoints||{})[n.id] || '';
+        html += `<div style="margin:8px 0;"><label>${n.id}</label><select data-peer="${n.id}">`;
+        html += `<option value="">使用默认</option>`;
+        eps.forEach(ep=>{
+          const sel = ep===current ? 'selected' : '';
+          html += `<option value="${ep}" ${sel}>${ep}</option>`;
+        });
+        html += `</select></div>`;
+      });
+      list.innerHTML = html || '<p>暂无其他节点</p>';
+      document.getElementById('peerModal').style.display = 'flex';
+    }
+    function closePeerConfig() {
+      document.getElementById('peerModal').style.display = 'none';
+    }
+    async function submitPeerConfig() {
+      if (!peerConfigCache.nodeId) { closePeerConfig(); return; }
+      const selects = document.querySelectorAll('#peerList select[data-peer]');
+      const overrides = {};
+      selects.forEach(s=>{
+        if (s.value) overrides[s.getAttribute('data-peer')] = s.value;
+      });
+      try {
+        await api('/api/v1/nodes/register', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id: peerConfigCache.nodeId, peerEndpoints: overrides, force:true})
+        });
+        alert('对端 Endpoint 已更新');
+        closePeerConfig();
+        reloadAll();
+      } catch (e) {
+        alert('更新失败: '+e);
+      }
+    }
+
     async function openEdit(id) {
       if (!id) return;
       const nodes = arr(await api('/api/v1/nodes'));
@@ -428,6 +510,19 @@
         reloadAll();
       } catch (e) {
         alert('更新失败: '+e);
+      }
+    }
+
+    async function diagnosePlan() {
+      const nodeId = document.getElementById('detailNode').value.trim();
+      if (!nodeId) { alert('请输入 Node ID'); return; }
+      const token = prompt('可选: ProvisionToken（为空使用 JWT）','');
+      try {
+        const headers = token ? {'X-Provision-Token':token} : {};
+        const data = await api('/api/v1/plan?nodeId='+encodeURIComponent(nodeId), {headers});
+        alert('诊断结果:\\n'+JSON.stringify(data,null,2));
+      } catch (e) {
+        alert('诊断失败: '+e);
       }
     }
 
@@ -524,11 +619,26 @@
       const token = tokenInput.value;
       const res = await fetch(base + '/api/v1/policy', {
         method: 'POST',
-        headers: Object.assign({'Content-Type':'application/json'}, token?{'X-Auth-Token':token}:{}),
+        headers: Object.assign({'Content-Type':'application/json'}, token?{'Authorization':'Bearer '+token}:{}),
         body: JSON.stringify({nodeId, egressPeerId: egressPeer, policyRules})
       });
       if (!res.ok) { alert('策略提交失败: '+res.status); return; }
-      alert('策略已提交，等待计划刷新');
+      const body = await res.json();
+      alert('策略已提交，等待计划刷新\n出口: '+(body.egressPeerId||'')+'\n规则数: '+(body.policyRules||[]).length);
+      loadPolicy(nodeId);
+    }
+
+    async function loadPolicy(nodeId) {
+      const base = baseInput.value.replace(/\/+$/, '');
+      const token = tokenInput.value;
+      const res = await fetch(base + '/api/v1/policy?nodeId='+encodeURIComponent(nodeId), {
+        headers: token?{'Authorization':'Bearer '+token}:{}
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      document.getElementById('egressPeer').value = data.egressPeerId||'';
+      policyRules = data.policyRules||[];
+      renderPolicyList();
     }
   </script>
 </body>

@@ -48,38 +48,44 @@ func RegisterPrepareRoute(mux *http.ServeMux, store store.NodeStore, planVersion
 			}
 			addr = fmt.Sprintf("%s://%s", scheme, r.Host)
 		}
-		priv, err := wgtypes.GeneratePrivateKey()
-		if err != nil {
-			http.Error(w, "failed to generate key", http.StatusInternalServerError)
-			return
-		}
-		pub := priv.PublicKey()
-		overlay := assignOverlay(store)
-		token := fmt.Sprintf("pt-%d", time.Now().UnixNano())
-		node := model.Node{
-			ID:             req.ID,
-			PublicKey:      pub.String(),
-			PrivateKey:     priv.String(),
-			OverlayIP:      overlay,
-			ListenPort:     51820,
-			ASN:            65000,
-			RouterID:       ipWithoutMask(overlay),
-			ProvisionToken: token,
-		}
-		if _, err := store.UpsertNode(node); err != nil {
-			http.Error(w, "failed to save node", http.StatusInternalServerError)
-			return
+		existing, ok, _ := store.GetNode(req.ID)
+		var node model.Node
+		if ok && existing.ProvisionToken != "" {
+			node = existing
+		} else {
+			priv, err := wgtypes.GeneratePrivateKey()
+			if err != nil {
+				http.Error(w, "failed to generate key", http.StatusInternalServerError)
+				return
+			}
+			pub := priv.PublicKey()
+			overlay := assignOverlay(store)
+			token := fmt.Sprintf("pt-%d", time.Now().UnixNano())
+			node = model.Node{
+				ID:             req.ID,
+				PublicKey:      pub.String(),
+				PrivateKey:     priv.String(),
+				OverlayIP:      overlay,
+				ListenPort:     51820,
+				ASN:            65000,
+				RouterID:       ipWithoutMask(overlay),
+				ProvisionToken: token,
+			}
+			if _, err := store.UpsertNode(node); err != nil {
+				http.Error(w, "failed to save node", http.StatusInternalServerError)
+				return
+			}
 		}
 		BumpPlanVersion(planVersion)
 		cmd := fmt.Sprintf(`curl -fsSL https://raw.githubusercontent.com/NiuStar/peer-wan/refs/heads/main/scripts/agent-install.sh -o /tmp/agent-install.sh && chmod +x /tmp/agent-install.sh && sudo /tmp/agent-install.sh --controller=%s --node-id=%s --provision-token=%s --auto-endpoint=true`,
-			addr, req.ID, token)
+			addr, req.ID, node.ProvisionToken)
 		resp := PrepareResponse{
 			ID:             req.ID,
-			PublicKey:      pub.String(),
-			PrivateKey:     priv.String(),
-			OverlayIP:      overlay,
+			PublicKey:      node.PublicKey,
+			PrivateKey:     node.PrivateKey,
+			OverlayIP:      node.OverlayIP,
 			ListenPort:     node.ListenPort,
-			ProvisionToken: token,
+			ProvisionToken: node.ProvisionToken,
 			Command:        cmd,
 		}
 		writeJSON(w, http.StatusOK, resp)

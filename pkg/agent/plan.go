@@ -19,32 +19,25 @@ func StartPlanPoller(client *http.Client, controller, authToken, provisionToken,
 	go func() {
 		ticker := time.NewTicker(interval)
 		var lastVersion string
-		var lastNumeric int64
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		// optional: if consul watch build tag present, hook into watch to trigger immediate fetch
 		if WatchEnabled() {
 			_ = StartConsulWatch(ctx, controller, authToken, func(v int64) {
-				// on change, set lastNumeric to v-1 to force fetch
-				if v > lastNumeric {
-					lastNumeric = v - 1
+				if v > 0 {
+					lastVersion = ""
 				}
 			})
 		}
 		for {
-			cfg, err := fetchPlan(client, controller, authToken, provisionToken, nodeID, lastNumeric)
+			cfg, err := fetchPlan(controller, authToken, provisionToken, nodeID)
 			if err != nil {
 				log.Printf("plan poll failed: %v", err)
-			} else {
-				if cfg.ConfigVersion != "" && cfg.ConfigVersion == lastVersion {
-					<-ticker.C
-					continue
-				}
+			} else if cfg.ConfigVersion != "" && cfg.ConfigVersion != lastVersion {
 				if err := handlePlan(cfg, node, outDir, iface, privateKey, asn, apply); err != nil {
 					log.Printf("plan apply failed: %v", err)
 				} else {
 					lastVersion = cfg.ConfigVersion
-					lastNumeric = parseNumericVersion(cfg.ConfigVersion)
 				}
 			}
 			<-ticker.C
@@ -69,6 +62,9 @@ func handlePlan(cfg api.NodeConfigResponse, node model.Node, outDir, iface, priv
 	if len(cfg.Routes) > 0 {
 		n.CIDRs = cfg.Routes
 	}
+	if len(cfg.PeerEndpoints) > 0 {
+		n.PeerEndpoints = cfg.PeerEndpoints
+	}
 	nextASN := asn
 	if n.ASN > 0 {
 		nextASN = n.ASN
@@ -87,7 +83,8 @@ func handlePlan(cfg api.NodeConfigResponse, node model.Node, outDir, iface, priv
 	return nil
 }
 
-func fetchPlan(client *http.Client, controller, authToken, provisionToken, nodeID string, waitVersion int64) (api.NodeConfigResponse, error) {
+func fetchPlan(controller, authToken, provisionToken, nodeID string) (api.NodeConfigResponse, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
 	// first check global plan version
 	url := fmt.Sprintf("%s/api/v1/version", controller)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -96,24 +93,16 @@ func fetchPlan(client *http.Client, controller, authToken, provisionToken, nodeI
 	}
 	setAuth(req, authToken, provisionToken)
 	resp, err := client.Do(req)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		var v struct {
-			Version int64 `json:"version"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&v)
-		if v.Version > waitVersion {
-			waitVersion = v.Version
-		}
+	if err != nil {
+		return api.NodeConfigResponse{}, err
 	}
-	if resp != nil {
-		_ = resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return api.NodeConfigResponse{}, fmt.Errorf("version fetch failed: %s", resp.Status)
 	}
 
-	// then fetch plan with waitVersion
+	// fetch plan without long wait
 	url = fmt.Sprintf("%s/api/v1/plan?nodeId=%s", controller, nodeID)
-	if waitVersion > 0 {
-		url += fmt.Sprintf("&waitVersion=%d", waitVersion)
-	}
 	req, err = http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return api.NodeConfigResponse{}, err

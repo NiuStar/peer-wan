@@ -87,12 +87,7 @@ func main() {
 	if *provisionToken != "" && *overlayIP == "10.10.1.1/32" {
 		req.OverlayIP = ""
 	}
-	if *provisionToken != "" && *autoEndpoint && len(req.Endpoints) == 0 {
-		if eps := detectEndpoints(*listenPort); len(eps) > 0 {
-			req.Endpoints = eps
-		}
-	}
-	if *autoEndpoint && endpointsPrivate(req.Endpoints) {
+	if *autoEndpoint {
 		if eps := detectEndpoints(*listenPort); len(eps) > 0 {
 			req.Endpoints = eps
 		}
@@ -205,7 +200,7 @@ func buildHTTPClient(caFile, certFile, keyFile string, insecure bool) (*http.Cli
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 	return &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 60 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
 		},
@@ -228,7 +223,7 @@ func detectEndpoints(listenPort int) []string {
 	// 1) best-effort via UDP dial to discover default egress
 	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
 		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
-			if !isPrivate(addr.IP) {
+			if isPublic(addr.IP) {
 				eps = append(eps, fmt.Sprintf("%s:%d", addr.IP.String(), listenPort))
 			}
 		}
@@ -264,13 +259,14 @@ func detectEndpoints(listenPort int) []string {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-			if ip == nil || !ip.IsGlobalUnicast() {
+			if !isPublic(ip) {
 				continue
 			}
-			if isPrivate(ip) {
-				continue
+			if ip.To4() == nil && strings.Contains(ip.String(), ":") {
+				eps = append(eps, fmt.Sprintf("[%s]:%d", ip.String(), listenPort))
+			} else {
+				eps = append(eps, fmt.Sprintf("%s:%d", ip.String(), listenPort))
 			}
-			eps = append(eps, fmt.Sprintf("%s:%d", ip.String(), listenPort))
 		}
 	}
 	return dedup(eps)
@@ -278,7 +274,7 @@ func detectEndpoints(listenPort int) []string {
 
 func isPrivate(ip net.IP) bool {
 	if ip.To4() != nil {
-		// 10.0.0.0/8, 172.16/12, 192.168/16
+		// 10.0.0.0/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16
 		if ip[0] == 10 {
 			return true
 		}
@@ -286,6 +282,12 @@ func isPrivate(ip net.IP) bool {
 			return true
 		}
 		if ip[0] == 192 && ip[1] == 168 {
+			return true
+		}
+		if ip[0] == 100 && ip[1]&0xc0 == 0x40 { // 100.64.0.0/10
+			return true
+		}
+		if ip[0] == 169 && ip[1] == 254 {
 			return true
 		}
 	}
@@ -298,6 +300,13 @@ func isPrivate(ip net.IP) bool {
 		return true
 	}
 	return false
+}
+
+func isPublic(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsGlobalUnicast() && !isPrivate(ip)
 }
 
 func dedup(xs []string) []string {
@@ -326,7 +335,7 @@ func fetchPublicIP(url string) string {
 		return ""
 	}
 	parsed := net.ParseIP(ip)
-	if parsed == nil || !parsed.IsGlobalUnicast() || isPrivate(parsed) {
+	if parsed == nil || !isPublic(parsed) {
 		return ""
 	}
 	return ip

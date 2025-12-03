@@ -48,8 +48,13 @@ func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors 
 		if pr.Prefix == "" || pr.ViaNode == "" {
 			continue
 		}
+		pfx := pr.Prefix
+		if !strings.Contains(pfx, "/") {
+			// default to /32 host route if mask missing
+			pfx = pr.Prefix + "/32"
+		}
 		if nh := overlayForPeer(pr.ViaNode, plan.Peers); nh != "" {
-			fmt.Fprintf(&b, " ip route %s %s\n", pr.Prefix, nh)
+			fmt.Fprintf(&b, " ip route %s %s\n", pfx, nh)
 		}
 	}
 	b.WriteString("!\n")

@@ -35,6 +35,7 @@ func RenderAndWrite(outputDir, iface string, node model.Node, peers []model.Peer
 		NodeID:       node.ID,
 		EgressPeerID: node.EgressPeerID,
 		PolicyRules:  node.PolicyRules,
+		Peers:        peers,
 	}
 	bgpConf, err := frr.RenderBGP(asn, routerID, iface, neighbors, node.CIDRs, plan)
 	if err != nil {

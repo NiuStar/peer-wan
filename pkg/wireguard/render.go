@@ -30,8 +30,14 @@ func RenderConfig(iface string, node model.Node, peers []model.Peer, privateKey 
 	for _, p := range peers {
 		b.WriteString("[Peer]\n")
 		fmt.Fprintf(&b, "PublicKey = %s\n", p.PublicKey)
-		if p.Endpoint != "" {
-			fmt.Fprintf(&b, "Endpoint = %s\n", p.Endpoint)
+		ep := p.Endpoint
+		if node.PeerEndpoints != nil {
+			if override, ok := node.PeerEndpoints[p.ID]; ok && override != "" {
+				ep = override
+			}
+		}
+		if ep != "" {
+			fmt.Fprintf(&b, "Endpoint = %s\n", ep)
 		}
 		if len(p.AllowedIPs) > 0 {
 			fmt.Fprintf(&b, "AllowedIPs = %s\n", strings.Join(p.AllowedIPs, ", "))

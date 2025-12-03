@@ -139,7 +139,6 @@ GOARCH=$(to_goarch "${ARCH}")
 echo "[peer-wan] detected ARCH=${ARCH} -> GOARCH=${GOARCH}"
 
 candidate_names="
-agent-linux-${GOARCH}
 agent-linux_${GOARCH}
 agent-${GOARCH}
 agent_${GOARCH}

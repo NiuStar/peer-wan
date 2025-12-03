@@ -122,14 +122,15 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		}
 
 		node := model.Node{
-			ID:         req.ID,
-			PublicKey:  pub,
-			Endpoints:  req.Endpoints,
-			CIDRs:      req.CIDRs,
-			ListenPort: req.ListenPort,
-			OverlayIP:  req.OverlayIP,
-			ASN:        req.ASN,
-			RouterID:   req.RouterID,
+			ID:            req.ID,
+			PublicKey:     pub,
+			Endpoints:     req.Endpoints,
+			CIDRs:         req.CIDRs,
+			ListenPort:    req.ListenPort,
+			OverlayIP:     req.OverlayIP,
+			ASN:           req.ASN,
+			RouterID:      req.RouterID,
+			PeerEndpoints: req.PeerEndpoints,
 		}
 
 		if allowWithoutJWT {
@@ -143,7 +144,9 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
 				node.OverlayIP = existing.OverlayIP
 			}
-			node.ProvisionToken = existing.ProvisionToken
+			if node.ProvisionToken == "" {
+				node.ProvisionToken = existing.ProvisionToken
+			}
 			if node.ListenPort == 0 {
 				node.ListenPort = existing.ListenPort
 			}
@@ -158,6 +161,9 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			}
 			if len(node.CIDRs) == 0 {
 				node.CIDRs = existing.CIDRs
+			}
+			if len(node.PeerEndpoints) == 0 {
+				node.PeerEndpoints = existing.PeerEndpoints
 			}
 		} else if ok {
 			// UI/API 编辑路径：合并已有字段，保留未提交的值
@@ -185,6 +191,12 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if len(node.CIDRs) == 0 {
 				node.CIDRs = existing.CIDRs
 			}
+			if len(node.PeerEndpoints) == 0 {
+				node.PeerEndpoints = existing.PeerEndpoints
+			}
+			if node.ProvisionToken == "" {
+				node.ProvisionToken = existing.ProvisionToken
+			}
 		}
 		if node.RouterID == "" && node.OverlayIP != "" {
 			if idx := strings.Index(node.OverlayIP, "/"); idx > 0 {
@@ -211,25 +223,28 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			Timestamp: time.Now(),
 		})
 
-		allNodes, err := store.ListNodes()
-		if err != nil {
-			http.Error(w, "failed to list nodes", http.StatusInternalServerError)
-			return
-		}
+		// recompute plans for all nodes to propagate new peer
+		allNodes, _ := store.ListNodes()
 		healthList, _ := store.ListHealth()
 		hmap := make(map[string]model.HealthReport)
 		for _, h := range healthList {
 			hmap[h.NodeID] = h
 		}
-		peerPlan := topology.BuildPeerPlan(saved.ID, allNodes, hmap)
-		savePlan(store, saved, peerPlan, planVersion)
-		BumpPlanVersion(planVersion)
+		localPlan := topology.BuildPeerPlan(saved.ID, allNodes, hmap)
+		if err := RecomputeAllPlans(store, planVersion); err != nil {
+			log.Printf("recompute plans failed after register: %v", err)
+		} else {
+			BumpPlanVersion(planVersion)
+		}
 		log.Printf("registered node %s endpoints=%v cidrs=%v version=%s", saved.ID, saved.Endpoints, saved.CIDRs, saved.ConfigVersion)
 
+		if saved.ConfigVersion == "" {
+			saved.ConfigVersion = version.Build
+		}
 		resp := NodeConfigResponse{
 			ID:             saved.ID,
 			ConfigVersion:  saved.ConfigVersion,
-			WireGuardPeers: peerPlan,
+			WireGuardPeers: localPlan,
 			Routes:         saved.CIDRs,
 			OverlayIP:      saved.OverlayIP,
 			ListenPort:     saved.ListenPort,
@@ -240,6 +255,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			PublicKey:      saved.PublicKey,
 			EgressPeerID:   saved.EgressPeerID,
 			PolicyRules:    saved.PolicyRules,
+			PeerEndpoints:  saved.PeerEndpoints,
 			Message:        "registered; peer plan derived from currently known nodes",
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -363,6 +379,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			ASN:            target.ASN,
 			RouterID:       target.RouterID,
 			Endpoints:      target.Endpoints,
+			PeerEndpoints:  target.PeerEndpoints,
 			EgressPeerID:   target.EgressPeerID,
 			PolicyRules:    target.PolicyRules,
 			Message:        "dynamic plan based on current health",
@@ -448,6 +465,9 @@ func savePlan(store store.NodeStore, node model.Node, peers []model.Peer, planVe
 		Routes:        node.CIDRs,
 		CreatedAt:     time.Now(),
 		Signature:     signPlan(node, peers, cv),
+		EgressPeerID:  node.EgressPeerID,
+		PolicyRules:   node.PolicyRules,
+		PeerEndpoints: node.PeerEndpoints,
 	}
 	_ = store.SavePlan(p)
 	_ = store.SetGlobalPlanVersion(version)

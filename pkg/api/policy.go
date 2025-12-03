@@ -20,20 +20,40 @@ func RegisterPolicyRoutes(mux *http.ServeMux, store store.NodeStore, auth func(r
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if r.Method != http.MethodPost {
+		switch r.Method {
+		case http.MethodPost:
+			var req PolicyRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" {
+				http.Error(w, "invalid payload", http.StatusBadRequest)
+				return
+			}
+			if err := store.UpdatePolicy(req.NodeID, req.EgressPeer, req.PolicyRules); err != nil {
+				http.Error(w, "failed to update policy", http.StatusInternalServerError)
+				return
+			}
+			BumpPlanVersion(planVersion)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"status":       "ok",
+				"egressPeerId": req.EgressPeer,
+				"policyRules":  req.PolicyRules,
+			})
+		case http.MethodGet:
+			nodeID := r.URL.Query().Get("nodeId")
+			if nodeID == "" {
+				http.Error(w, "nodeId is required", http.StatusBadRequest)
+				return
+			}
+			n, ok, err := store.GetNode(nodeID)
+			if err != nil || !ok {
+				http.Error(w, "node not found", http.StatusNotFound)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"egressPeerId": n.EgressPeerID,
+				"policyRules":  n.PolicyRules,
+			})
+		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
 		}
-		var req PolicyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
-			return
-		}
-		if err := store.UpdatePolicy(req.NodeID, req.EgressPeer, req.PolicyRules); err != nil {
-			http.Error(w, "failed to update policy", http.StatusInternalServerError)
-			return
-		}
-		BumpPlanVersion(planVersion)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 }
