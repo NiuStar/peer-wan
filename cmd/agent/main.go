@@ -18,6 +18,7 @@ import (
 	"peer-wan/pkg/agent"
 	"peer-wan/pkg/api"
 	"peer-wan/pkg/model"
+	"peer-wan/pkg/version"
 )
 
 func main() {
@@ -31,6 +32,7 @@ func main() {
 	defaultProvision := os.Getenv("PROVISION_TOKEN")
 
 	nodeID := flag.String("id", defaultID, "node id (overrides NODE_ID env)")
+	showVersion := flag.Bool("v", false, "print version and exit")
 	publicKey := flag.String("pub", "stub-public-key", "wireguard public key (placeholder)")
 	endpoints := flag.String("endpoints", "127.0.0.1:51820", "comma separated endpoints")
 	cidrs := flag.String("cidrs", "10.10.1.0/24", "comma separated CIDRs announced by this node")
@@ -53,6 +55,11 @@ func main() {
 	provisionToken := flag.String("provision-token", defaultProvision, "one-time provision token from controller (env PROVISION_TOKEN)")
 	autoEndpoint := flag.Bool("auto-endpoint", true, "auto-detect endpoint when provision-token is set")
 	flag.Parse()
+
+	if *showVersion {
+		log.Printf("agent version=%s", version.Build)
+		return
+	}
 
 	if *nodeID == "" {
 		log.Fatal("node id is required (flag --id or env NODE_ID)")
@@ -80,9 +87,14 @@ func main() {
 	if *provisionToken != "" && *overlayIP == "10.10.1.1/32" {
 		req.OverlayIP = ""
 	}
-	if *provisionToken != "" && *autoEndpoint {
-		if ep := detectEndpoint(*listenPort); ep != "" {
-			req.Endpoints = []string{ep}
+	if *provisionToken != "" && *autoEndpoint && len(req.Endpoints) == 0 {
+		if eps := detectEndpoints(*listenPort); len(eps) > 0 {
+			req.Endpoints = eps
+		}
+	}
+	if *autoEndpoint && endpointsPrivate(req.Endpoints) {
+		if eps := detectEndpoints(*listenPort); len(eps) > 0 {
+			req.Endpoints = eps
 		}
 	}
 
@@ -109,6 +121,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("render/apply failed: %v", err)
 	}
+	log.Printf("agent version=%s", version.Build)
 	log.Printf("configs written: wireguard=%s bgp=%s (apply=%v)", wgPath, bgpPath, *apply)
 	if *apply {
 		if err := agent.ApplyConfigs(wgPath, *iface, bgpPath); err != nil {
@@ -210,16 +223,129 @@ func splitAndTrim(s string) []string {
 	return out
 }
 
-func detectEndpoint(listenPort int) string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+func detectEndpoints(listenPort int) []string {
+	var eps []string
+	// 1) best-effort via UDP dial to discover default egress
+	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+			if !isPrivate(addr.IP) {
+				eps = append(eps, fmt.Sprintf("%s:%d", addr.IP.String(), listenPort))
+			}
+		}
+		_ = conn.Close()
+	}
+	// 2) public IP services (ipv4/ipv6)
+	for _, svc := range []string{
+		"http://ipv4.icanhazip.com",
+		"http://ipv6.icanhazip.com",
+		"https://api.ipify.org",
+		"https://ip.sb",
+	} {
+		if ip := fetchPublicIP(svc); ip != "" {
+			if strings.Contains(ip, ":") {
+				eps = append(eps, fmt.Sprintf("[%s]:%d", ip, listenPort))
+			} else {
+				eps = append(eps, fmt.Sprintf("%s:%d", ip, listenPort))
+			}
+		}
+	}
+	// 2) enumerate interfaces for public/global addresses
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || !ip.IsGlobalUnicast() {
+				continue
+			}
+			if isPrivate(ip) {
+				continue
+			}
+			eps = append(eps, fmt.Sprintf("%s:%d", ip.String(), listenPort))
+		}
+	}
+	return dedup(eps)
+}
+
+func isPrivate(ip net.IP) bool {
+	if ip.To4() != nil {
+		// 10.0.0.0/8, 172.16/12, 192.168/16
+		if ip[0] == 10 {
+			return true
+		}
+		if ip[0] == 172 && ip[1]&0xf0 == 16 {
+			return true
+		}
+		if ip[0] == 192 && ip[1] == 168 {
+			return true
+		}
+	}
+	// ULA fc00::/7
+	if ip.To16() != nil && ip[0]&0xfe == 0xfc {
+		return true
+	}
+	// loopback
+	if ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+func dedup(xs []string) []string {
+	seen := make(map[string]bool)
+	out := []string{}
+	for _, x := range xs {
+		if x == "" || seen[x] {
+			continue
+		}
+		seen[x] = true
+		out = append(out, x)
+	}
+	return out
+}
+
+func fetchPublicIP(url string) string {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return ""
 	}
-	defer conn.Close()
-	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
-		return fmt.Sprintf("%s:%d", addr.IP.String(), listenPort)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	ip := strings.TrimSpace(string(b))
+	if ip == "" {
+		return ""
 	}
-	return ""
+	parsed := net.ParseIP(ip)
+	if parsed == nil || !parsed.IsGlobalUnicast() || isPrivate(parsed) {
+		return ""
+	}
+	return ip
+}
+
+func endpointsPrivate(eps []string) bool {
+	if len(eps) == 0 {
+		return true
+	}
+	for _, ep := range eps {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(ep))
+		if err != nil {
+			continue
+		}
+		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && !isPrivate(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 func firstNonEmpty(vals ...string) string {

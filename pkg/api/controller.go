@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"peer-wan/pkg/version"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -36,10 +37,11 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 
 	mux.HandleFunc("/api/v1/info", func(w http.ResponseWriter, _ *http.Request) {
 		info := map[string]interface{}{
-			"store":       storeType,
-			"consulAddr":  consulAddr,
-			"publicAddr":  controllerAddr,
-			"planVersion": atomic.LoadInt64(planVersion),
+			"store":        storeType,
+			"consulAddr":   consulAddr,
+			"publicAddr":   controllerAddr,
+			"planVersion":  atomic.LoadInt64(planVersion),
+			"buildVersion": version.Build,
 		}
 		if dbRef != nil {
 			sqlDB, err := dbRef.DB()

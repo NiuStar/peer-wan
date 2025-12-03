@@ -13,10 +13,12 @@ import (
 	"peer-wan/pkg/api"
 	"peer-wan/pkg/db"
 	"peer-wan/pkg/store"
+	"peer-wan/pkg/version"
 )
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
+	showVersion := flag.Bool("v", false, "print version and exit")
 	storeType := flag.String("store", getenv("STORE", "memory"), "store backend: memory|consul (requires build tag consul)")
 	consulAddr := flag.String("consul-addr", getenv("CONSUL_HTTP_ADDR", "127.0.0.1:8500"), "consul address (when store=consul)")
 	tlsCert := flag.String("tls-cert", "", "TLS cert path (enables HTTPS if set with --tls-key)")
@@ -25,6 +27,11 @@ func main() {
 	lockKey := flag.String("lock-key", "peer-wan/locks/leader", "Consul lock key for leader election")
 	publicAddr := flag.String("public-addr", getenv("PUBLIC_ADDR", ""), "controller external base URL for agent bootstrap (e.g. https://ctrl.example.com:8080)")
 	flag.Parse()
+
+	if *showVersion {
+		log.Printf("controller version=%s", version.Build)
+		return
+	}
 
 	dbConn, err := db.Init()
 	if err != nil {
@@ -42,7 +49,7 @@ func main() {
 	default:
 		log.Fatalf("unsupported store type: %s", *storeType)
 	}
-	log.Printf("starting controller store=%s consul=%s publicAddr=%s", *storeType, *consulAddr, *publicAddr)
+	log.Printf("starting controller version=%s store=%s consul=%s publicAddr=%s", version.Build, *storeType, *consulAddr, *publicAddr)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr, *storeType, *consulAddr)

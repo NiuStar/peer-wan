@@ -2,7 +2,9 @@ FROM golang:1.25-alpine AS builder
 WORKDIR /app
 COPY . .
 ENV GOMODCACHE=/app/vendor
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=consul -o /app/bin/controller ./cmd/controller
+ARG BUILD_VERSION
+RUN BUILD_VERSION=${BUILD_VERSION:-$(date -u +%Y-%m-%d-%H-%M)} && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=consul -ldflags="-X peer-wan/pkg/version.Build=${BUILD_VERSION}" -o /app/bin/controller ./cmd/controller
 
 FROM alpine:3.18
 WORKDIR /app

@@ -84,6 +84,8 @@ if [ -f /etc/systemd/system/peer-wan-agent.service ]; then
   rm -f /etc/systemd/system/peer-wan-agent.service
   systemctl daemon-reload || true
 fi
+# remove old binaries
+rm -f "${BIN_DIR}/agent" "${BIN_DIR}/peer-wan-agent" || true
 
 # optional dependencies install (wireguard + frr)
 if [ "${AUTO_INSTALL_DEPS}" = "true" ]; then
@@ -226,6 +228,7 @@ Environment=APPLY=${APPLY}
 ExecStart=${BIN_DIR}/peer-wan-agent
 Restart=always
 RestartSec=5
+WorkingDirectory=/tmp
 
 [Install]
 WantedBy=multi-user.target
