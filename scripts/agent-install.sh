@@ -32,6 +32,7 @@ PROXY=${PROXY:-}
 WAN_IF=${WAN_IF:-}
 WG_CIDR=${WG_CIDR:-10.10.0.0/16}
 PERSIST_IPT=${PERSIST_IPT:-true}
+OS_FAMILY=$(uname -s | tr 'A-Z' 'a-z')
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -145,6 +146,46 @@ persist_iptables() {
   fi
 }
 
+# macOS launchd service install
+install_launchd_service() {
+  PLIST=/Library/LaunchDaemons/com.peerwan.agent.plist
+  TMP_PLIST=$(mktemp)
+  cat > "${TMP_PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.peerwan.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${BIN_DIR}/peer-wan-agent</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CONTROLLER_ADDR</key><string>${CONTROLLER_ADDR}</string>
+    <key>NODE_ID</key><string>${NODE_ID}</string>
+    <key>PROVISION_TOKEN</key><string>${PROVISION_TOKEN}</string>
+    <key>TOKEN</key><string>${TOKEN}</string>
+    <key>PLAN_INTERVAL</key><string>${PLAN_INTERVAL}</string>
+    <key>HEALTH_INTERVAL</key><string>${HEALTH_INTERVAL}</string>
+    <key>APPLY</key><string>${APPLY}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/peer-wan-agent.log</string>
+  <key>StandardErrorPath</key><string>/var/log/peer-wan-agent.err</string>
+</dict>
+</plist>
+EOF
+  echo "[peer-wan] installing launchd service to ${PLIST}"
+  sudo mv "${TMP_PLIST}" "${PLIST}"
+  sudo chown root:wheel "${PLIST}"
+  sudo chmod 644 "${PLIST}"
+  sudo launchctl unload "${PLIST}" 2>/dev/null || true
+  sudo launchctl load "${PLIST}"
+  sudo launchctl start com.peerwan.agent
+}
+
 # clean previous service if present
 if [ -f /etc/systemd/system/peer-wan-agent.service ]; then
   echo "[peer-wan] removing old systemd service"
@@ -159,7 +200,13 @@ rm -f "${BIN_DIR}/agent" "${BIN_DIR}/peer-wan-agent" || true
 # optional dependencies install (wireguard + frr)
 if [ "${AUTO_INSTALL_DEPS}" = "true" ]; then
   echo "[peer-wan] installing dependencies (wireguard/frr) if possible..."
-  if command -v apt-get >/dev/null 2>&1; then
+  if [ "${OS_FAMILY}" = "darwin" ]; then
+    if command -v brew >/dev/null 2>&1; then
+      brew install wireguard-tools frr iproute2mac || echo "[peer-wan][warn] brew install failed, please install wireguard/frr/iproute2mac manually"
+    else
+      echo "[peer-wan][warn] Homebrew not found; please install wireguard-tools/frr manually"
+    fi
+  elif command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update && sudo apt-get install -y wireguard wireguard-tools frr iptables-persistent || echo "[peer-wan][warn] apt install failed, please install wireguard/frr manually"
   elif command -v yum >/dev/null 2>&1; then
     sudo yum install -y epel-release || true
@@ -207,11 +254,19 @@ to_goarch() {
 GOARCH=$(to_goarch "${ARCH}")
 echo "[peer-wan] detected ARCH=${ARCH} -> GOARCH=${GOARCH}"
 
-candidate_names="
+if [ "${OS_FAMILY}" = "darwin" ]; then
+  candidate_names="
+agent-darwin_${GOARCH}
+agent_${GOARCH}
+agent-${GOARCH}
+"
+else
+  candidate_names="
 agent-linux_${GOARCH}
 agent-${GOARCH}
 agent_${GOARCH}
 "
+fi
 
 download_ok=0
 for name in $candidate_names; do
@@ -250,8 +305,12 @@ chmod +x "${TMP_DIR}/agent"
 install -m 0755 "${TMP_DIR}/agent" "${BIN_DIR}/agent"
 echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
 
-echo "[peer-wan] configuring forwarding/NAT (best-effort)..."
-configure_network || true
+if [ "${OS_FAMILY}" != "darwin" ]; then
+  echo "[peer-wan] configuring forwarding/NAT (best-effort)..."
+  configure_network || true
+else
+  echo "[peer-wan] macOS detected, skipping iptables/NAT configuration"
+fi
 
 cat > "${BIN_DIR}/peer-wan-agent" <<EOF
 #!/usr/bin/env sh
@@ -309,6 +368,8 @@ EOF
   systemctl restart peer-wan-agent.service
   systemctl status --no-pager peer-wan-agent.service || true
   echo "[peer-wan] systemd service installed and started."
+elif [ "${SERVICE}" = "true" ] && [ "${OS_FAMILY}" = "darwin" ]; then
+  install_launchd_service || echo "[peer-wan][warn] launchd service install failed"
 else
   echo "[peer-wan] systemd not installed or SERVICE!=true; skip service install."
 fi
