@@ -29,16 +29,17 @@ func StartPlanPoller(client *http.Client, controller, authToken, provisionToken,
 				}
 			})
 		}
-		for {
-			cfg, err := fetchPlan(controller, authToken, provisionToken, nodeID)
-			if err != nil {
-				log.Printf("plan poll failed: %v", err)
-			} else if cfg.ConfigVersion != "" && cfg.ConfigVersion != lastVersion {
-				if err := handlePlan(cfg, node, outDir, iface, privateKey, asn, apply); err != nil {
-					log.Printf("plan apply failed: %v", err)
-				} else {
-					lastVersion = cfg.ConfigVersion
-				}
+	for {
+		cfg, err := fetchPlan(controller, authToken, provisionToken, nodeID)
+		if err != nil {
+			log.Printf("plan poll failed: %v", err)
+		} else if cfg.ConfigVersion != "" && cfg.ConfigVersion != lastVersion {
+			log.Printf("plan fetched node=%s version=%s egress=%s rules=%d peers=%d", nodeID, cfg.ConfigVersion, cfg.EgressPeerID, len(cfg.PolicyRules), len(cfg.WireGuardPeers))
+			if err := handlePlan(cfg, node, outDir, iface, privateKey, asn, apply); err != nil {
+				log.Printf("plan apply failed: %v", err)
+			} else {
+				lastVersion = cfg.ConfigVersion
+			}
 			}
 			<-ticker.C
 		}
@@ -65,6 +66,13 @@ func handlePlan(cfg api.NodeConfigResponse, node model.Node, outDir, iface, priv
 	if len(cfg.PeerEndpoints) > 0 {
 		n.PeerEndpoints = cfg.PeerEndpoints
 	}
+	if cfg.EgressPeerID != "" {
+		n.EgressPeerID = cfg.EgressPeerID
+	}
+	if len(cfg.PolicyRules) > 0 {
+		n.PolicyRules = cfg.PolicyRules
+	}
+	log.Printf("apply plan node=%s version=%s egress=%s rules=%d peers=%d", cfg.ID, cfg.ConfigVersion, cfg.EgressPeerID, len(cfg.PolicyRules), len(cfg.WireGuardPeers))
 	nextASN := asn
 	if n.ASN > 0 {
 		nextASN = n.ASN

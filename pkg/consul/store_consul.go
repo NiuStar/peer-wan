@@ -271,13 +271,13 @@ func (s *Store) UpdatePolicy(nodeID string, egressPeer string, rules []model.Pol
 	if nodeKV == nil {
 		return fmt.Errorf("node not found")
 	}
-	var n model.Node
-	if err := json.Unmarshal(nodeKV.Value, &n); err != nil {
+	var rec nodeRecord
+	if err := json.Unmarshal(nodeKV.Value, &rec); err != nil {
 		return err
 	}
-	n.EgressPeerID = egressPeer
-	n.PolicyRules = rules
-	b, err := json.Marshal(n)
+	rec.Node.EgressPeerID = egressPeer
+	rec.Node.PolicyRules = rules
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}

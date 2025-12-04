@@ -2,6 +2,7 @@ package frr
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"peer-wan/pkg/model"
@@ -41,25 +42,58 @@ func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors 
 	// policy: default route via egress peer overlay, policy rules as static routes
 	if plan.EgressPeerID != "" && len(plan.Peers) > 0 {
 		if nextHop := overlayForPeer(plan.EgressPeerID, plan.Peers); nextHop != "" {
-			fmt.Fprintf(&b, " ip route 0.0.0.0/0 %s\n", nextHop)
+			fmt.Fprintf(&b, " ip route 0.0.0.0/0 %s\n", stripMask(nextHop))
 		}
 	}
 	for _, pr := range plan.PolicyRules {
-		if pr.Prefix == "" || pr.ViaNode == "" {
+		if pr.ViaNode == "" {
 			continue
 		}
-		pfx := pr.Prefix
-		if !strings.Contains(pfx, "/") {
-			// default to /32 host route if mask missing
-			pfx = pr.Prefix + "/32"
+		nh := stripMask(overlayForPeer(pr.ViaNode, plan.Peers))
+		if nh == "" {
+			continue
 		}
-		if nh := overlayForPeer(pr.ViaNode, plan.Peers); nh != "" {
-			fmt.Fprintf(&b, " ip route %s %s\n", pfx, nh)
+		targets := []string{}
+		if pr.Prefix != "" {
+			pfx := pr.Prefix
+			if !strings.Contains(pfx, "/") {
+				pfx = pr.Prefix + "/32"
+			}
+			targets = append(targets, pfx)
+		}
+		for _, d := range pr.Domains {
+			for _, ip := range resolveDomain(d) {
+				targets = append(targets, ip+"/32")
+			}
+		}
+		for _, t := range targets {
+			fmt.Fprintf(&b, " ip route %s %s\n", t, nh)
 		}
 	}
 	b.WriteString("!\n")
 
 	return BGPConfig{BGPD: b.String()}, nil
+}
+
+func stripMask(ip string) string {
+	if i := strings.Index(ip, "/"); i > 0 {
+		return ip[:i]
+	}
+	return ip
+}
+
+func resolveDomain(domain string) []string {
+	out := []string{}
+	ipList, err := net.LookupIP(domain)
+	if err != nil {
+		return out
+	}
+	for _, ip := range ipList {
+		if v4 := ip.To4(); v4 != nil {
+			out = append(out, v4.String())
+		}
+	}
+	return out
 }
 
 func overlayForPeer(id string, peers []model.Peer) string {

@@ -8,9 +8,11 @@ usage() {
 Usage: $0 [--controller=http://ctrl:8080] [--node-id=edge-1] [--provision-token=pt-xxx]
           [--token=jwt] [--plan-interval=30s] [--health-interval=30s]
           [--apply=true|false] [--release-tag=vX.Y.Z] [--proxy=http://host:port]
-          [--no-service] [--no-deps]
+          [--no-service] [--no-deps] [WAN_IF=eth0] [PERSIST_IPT=true|false]
 
 Flags override env vars (CONTROLLER_ADDR, NODE_ID, PROVISION_TOKEN, TOKEN, PLAN_INTERVAL, HEALTH_INTERVAL, APPLY, RELEASE_TAG, PROXY, SERVICE, AUTO_INSTALL_DEPS).
+WAN_IF: optional override for出口网卡，缺省自动探测默认路由的 dev；会自动开启 ip_forward、添加 FORWARD 放行与 10.10.0.0/16 的 MASQUERADE。
+PERSIST_IPT: 是否尝试持久化 iptables（默认 true，Debian/Ubuntu 写 /etc/iptables/rules.v4 并尝试安装 iptables-persistent；RHEL/CentOS 写 /etc/sysconfig/iptables 并尝试启用 iptables-services）。
 EOF
 }
 
@@ -27,6 +29,9 @@ ARCH=${ARCH:-$(uname -m)}
 SERVICE=${SERVICE:-true}
 AUTO_INSTALL_DEPS=${AUTO_INSTALL_DEPS:-true}
 PROXY=${PROXY:-}
+WAN_IF=${WAN_IF:-}
+WG_CIDR=${WG_CIDR:-10.10.0.0/16}
+PERSIST_IPT=${PERSIST_IPT:-true}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -76,6 +81,70 @@ if [ -n "${PROXY}" ]; then
   echo "[peer-wan] using proxy prefix ${PROXY} for downloads"
 fi
 
+detect_wan_if() {
+  if [ -n "${WAN_IF}" ]; then
+    echo "${WAN_IF}"
+    return
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev" && (i+1)<=NF){print $(i+1); exit}}}'
+  fi
+}
+
+configure_network() {
+  WAN_IF_DETECTED=$(detect_wan_if)
+  if [ -z "${WAN_IF_DETECTED}" ]; then
+    echo "[peer-wan][warn] could not detect WAN interface; skip iptables/NAT setup"
+    return
+  fi
+  echo "[peer-wan] WAN interface=${WAN_IF_DETECTED} (override with WAN_IF=xxx)"
+  # enable forwarding
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+  fi
+  if ! command -v iptables >/dev/null 2>&1; then
+    echo "[peer-wan][warn] iptables not found; skip MASQUERADE/FORWARD setup"
+    return
+  fi
+  # allow wg0 -> wan and return traffic
+  iptables -C FORWARD -i wg0 -o "${WAN_IF_DETECTED}" -j ACCEPT >/dev/null 2>&1 || \
+    iptables -A FORWARD -i wg0 -o "${WAN_IF_DETECTED}" -j ACCEPT || true
+  iptables -C FORWARD -i "${WAN_IF_DETECTED}" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || \
+    iptables -A FORWARD -i "${WAN_IF_DETECTED}" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT || true
+  # SNAT for overlay subnet
+  iptables -t nat -C POSTROUTING -s "${WG_CIDR}" -o "${WAN_IF_DETECTED}" -j MASQUERADE >/dev/null 2>&1 || \
+    iptables -t nat -A POSTROUTING -s "${WG_CIDR}" -o "${WAN_IF_DETECTED}" -j MASQUERADE || true
+
+  if [ "${PERSIST_IPT}" = "true" ]; then
+    persist_iptables
+  fi
+}
+
+persist_iptables() {
+  if ! command -v iptables-save >/dev/null 2>&1; then
+    echo "[peer-wan][warn] iptables-save not found; skip persistence"
+    return
+  fi
+  # Debian/Ubuntu style
+  if [ -d /etc/iptables ]; then
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/rules.v4 || true
+    echo "[peer-wan] saved iptables to /etc/iptables/rules.v4"
+  elif [ -d /etc/sysconfig ]; then
+    iptables-save > /etc/sysconfig/iptables || true
+    echo "[peer-wan] saved iptables to /etc/sysconfig/iptables"
+  fi
+  # Try install helpers if available
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y iptables-services >/dev/null 2>&1 || true
+    systemctl enable iptables >/dev/null 2>&1 || true
+    systemctl restart iptables >/dev/null 2>&1 || true
+  fi
+}
+
 # clean previous service if present
 if [ -f /etc/systemd/system/peer-wan-agent.service ]; then
   echo "[peer-wan] removing old systemd service"
@@ -91,12 +160,12 @@ rm -f "${BIN_DIR}/agent" "${BIN_DIR}/peer-wan-agent" || true
 if [ "${AUTO_INSTALL_DEPS}" = "true" ]; then
   echo "[peer-wan] installing dependencies (wireguard/frr) if possible..."
   if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update && sudo apt-get install -y wireguard wireguard-tools frr || echo "[peer-wan][warn] apt install failed, please install wireguard/frr manually"
+    sudo apt-get update && sudo apt-get install -y wireguard wireguard-tools frr iptables-persistent || echo "[peer-wan][warn] apt install failed, please install wireguard/frr manually"
   elif command -v yum >/dev/null 2>&1; then
     sudo yum install -y epel-release || true
-    sudo yum install -y wireguard-tools frr || echo "[peer-wan][warn] yum install failed, please install wireguard/frr manually"
+    sudo yum install -y wireguard-tools frr iptables-services || echo "[peer-wan][warn] yum install failed, please install wireguard/frr manually"
   elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y wireguard-tools frr || echo "[peer-wan][warn] dnf install failed, please install wireguard/frr manually"
+    sudo dnf install -y wireguard-tools frr iptables-services || echo "[peer-wan][warn] dnf install failed, please install wireguard/frr manually"
   else
     echo "[peer-wan][warn] unknown package manager, please install wireguard/frr manually"
   fi
@@ -180,6 +249,9 @@ fi
 chmod +x "${TMP_DIR}/agent"
 install -m 0755 "${TMP_DIR}/agent" "${BIN_DIR}/agent"
 echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
+
+echo "[peer-wan] configuring forwarding/NAT (best-effort)..."
+configure_network || true
 
 cat > "${BIN_DIR}/peer-wan-agent" <<EOF
 #!/usr/bin/env sh

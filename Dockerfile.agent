@@ -3,7 +3,7 @@ WORKDIR /app
 COPY . .
 ENV GOMODCACHE=/app/vendor
 ARG BUILD_VERSION
-RUN BUILD_VERSION=${BUILD_VERSION:-$(date -u +%Y-%m-%d-%H-%M)} && \
+RUN BUILD_VERSION=${BUILD_VERSION:-$(date -d 'now +8 hours' +%Y-%m-%d-%H-%M)} && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=consul -ldflags="-X peer-wan/pkg/version.Build=${BUILD_VERSION}" -o /app/bin/agent ./cmd/agent
 
 FROM alpine:3.18

@@ -30,6 +30,7 @@ func main() {
 	defaultToken := os.Getenv("AUTH_TOKEN")
 	defaultCA := os.Getenv("CA_FILE")
 	defaultProvision := os.Getenv("PROVISION_TOKEN")
+	defaultOut := os.Getenv("OUT_DIR")
 
 	nodeID := flag.String("id", defaultID, "node id (overrides NODE_ID env)")
 	showVersion := flag.Bool("v", false, "print version and exit")
@@ -39,7 +40,7 @@ func main() {
 	overlayIP := flag.String("overlay-ip", "10.10.1.1/32", "overlay interface IP (wg Address)")
 	listenPort := flag.Int("listen-port", 51820, "wireguard listen port")
 	privateKey := flag.String("priv", "stub-private-key", "wireguard private key (placeholder)")
-	outputDir := flag.String("out", "./out", "directory to write rendered configs")
+	outputDir := flag.String("out", firstNonEmpty(defaultOut, "./out"), "directory to write rendered configs")
 	iface := flag.String("iface", "wg0", "wireguard interface name")
 	asn := flag.Int("asn", 65000, "BGP ASN for FRR config")
 	routerID := flag.String("router-id", "", "override BGP router-id (defaults to overlay IP)")
@@ -116,7 +117,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("render/apply failed: %v", err)
 	}
-	log.Printf("agent version=%s", version.Build)
+	log.Printf("agent version=%s", version.BuildCN())
 	log.Printf("configs written: wireguard=%s bgp=%s (apply=%v)", wgPath, bgpPath, *apply)
 	if *apply {
 		if err := agent.ApplyConfigs(wgPath, *iface, bgpPath); err != nil {

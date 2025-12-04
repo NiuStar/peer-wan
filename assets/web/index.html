@@ -106,7 +106,8 @@
     <div style="margin-top:8px;">
       <h4>出口/策略配置</h4>
       <label>出口 PeerID</label><input id="egressPeer" placeholder="peer-id" style="width:120px;">
-      <label>策略前缀</label><input id="policyPrefix" placeholder="8.8.8.0/24" style="width:150px;">
+      <label>策略前缀</label><input id="policyPrefix" placeholder="8.8.8.0/24 (可留空)" style="width:150px;">
+      <label>域名(逗号)</label><input id="policyDomains" placeholder="example.com,ip.sb" style="width:180px;">
       <label>经由节点</label><input id="policyVia" placeholder="peer-id" style="width:120px;">
       <button class="btn-secondary" onclick="addPolicy()">添加规则</button>
       <button onclick="submitPolicy()">提交策略</button>
@@ -245,6 +246,7 @@
       policyRules = data.policyRules || [];
       document.getElementById('egressPeer').value = data.egressPeerId || '';
       renderPolicyList();
+      loadPolicy(nodeId);
       let html = `<p>计划版本: ${data.configVersion||''} | 消息: ${data.message||''}</p>`;
       document.getElementById('plan').innerHTML = html;
       renderTable(document.getElementById('plan'), [
@@ -589,10 +591,13 @@
 
     function addPolicy() {
       const prefix = document.getElementById('policyPrefix').value.trim();
+      const domains = document.getElementById('policyDomains').value.split(',').map(s=>s.trim()).filter(Boolean);
       const via = document.getElementById('policyVia').value.trim();
-      if (!prefix || !via) { alert('请输入前缀和经由节点'); return; }
-      policyRules.push({prefix, viaNode: via});
+      if (!prefix && domains.length===0) { alert('前缀和域名至少填一个'); return; }
+      if (!via) { alert('请输入经由节点'); return; }
+      policyRules.push({prefix, viaNode: via, domains});
       document.getElementById('policyPrefix').value = '';
+      document.getElementById('policyDomains').value = '';
       document.getElementById('policyVia').value = '';
       renderPolicyList();
     }
@@ -601,7 +606,10 @@
       const el = document.getElementById('policyList');
       if (!policyRules.length) { el.innerHTML = '<p>无策略规则</p>'; return; }
       let html = '<ul>';
-      policyRules.forEach((r, idx)=>{ html += `<li>${r.prefix} -> ${r.viaNode} <button class="btn-secondary" onclick="removePolicy(${idx})">删</button></li>`; });
+      policyRules.forEach((r, idx)=>{
+        const dom = (r.domains||[]).join(',');
+        html += `<li>${r.prefix||'(域名)'} ${dom?('['+dom+']'):''} -> ${r.viaNode} <button class="btn-secondary" onclick="removePolicy(${idx})">删</button></li>`;
+      });
       html += '</ul>';
       el.innerHTML = html;
     }

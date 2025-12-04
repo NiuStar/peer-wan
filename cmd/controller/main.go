@@ -21,6 +21,7 @@ func main() {
 	showVersion := flag.Bool("v", false, "print version and exit")
 	storeType := flag.String("store", getenv("STORE", "memory"), "store backend: memory|consul (requires build tag consul)")
 	consulAddr := flag.String("consul-addr", getenv("CONSUL_HTTP_ADDR", "127.0.0.1:8500"), "consul address (when store=consul)")
+	//consulAddr := flag.String("consul-addr", getenv("CONSUL_HTTP_ADDR", "8.222.155.32:8500"), "consul address (when store=consul)")
 	tlsCert := flag.String("tls-cert", "", "TLS cert path (enables HTTPS if set with --tls-key)")
 	tlsKey := flag.String("tls-key", "", "TLS key path (enables HTTPS if set with --tls-cert)")
 	clientCA := flag.String("client-ca", "", "require and verify client certs using this CA (optional)")
@@ -29,7 +30,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		log.Printf("controller version=%s", version.Build)
+		log.Printf("controller version=%s", version.BuildCN())
 		return
 	}
 
@@ -49,7 +50,7 @@ func main() {
 	default:
 		log.Fatalf("unsupported store type: %s", *storeType)
 	}
-	log.Printf("starting controller version=%s store=%s consul=%s publicAddr=%s", version.Build, *storeType, *consulAddr, *publicAddr)
+	log.Printf("starting controller version=%s store=%s consul=%s publicAddr=%s", version.BuildCN(), *storeType, *consulAddr, *publicAddr)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr, *storeType, *consulAddr)

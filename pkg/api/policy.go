@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"peer-wan/pkg/model"
 	"peer-wan/pkg/store"
@@ -27,16 +28,35 @@ func RegisterPolicyRoutes(mux *http.ServeMux, store store.NodeStore, auth func(r
 				http.Error(w, "invalid payload", http.StatusBadRequest)
 				return
 			}
+			if len(req.PolicyRules) > 0 {
+				valid := 0
+				for i := range req.PolicyRules {
+					// allow missing mask -> /32 auto-filled later
+					req.PolicyRules[i].Prefix = strings.TrimSpace(req.PolicyRules[i].Prefix)
+					if req.PolicyRules[i].Validate() {
+						valid++
+					}
+				}
+				if valid == 0 {
+					http.Error(w, "no valid policy rules", http.StatusBadRequest)
+					return
+				}
+			}
 			if err := store.UpdatePolicy(req.NodeID, req.EgressPeer, req.PolicyRules); err != nil {
 				http.Error(w, "failed to update policy", http.StatusInternalServerError)
 				return
 			}
 			BumpPlanVersion(planVersion)
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"status":       "ok",
-				"egressPeerId": req.EgressPeer,
-				"policyRules":  req.PolicyRules,
-			})
+			// respond with current saved values
+			if n, ok, _ := store.GetNode(req.NodeID); ok {
+				writeJSON(w, http.StatusOK, map[string]interface{}{
+					"status":       "ok",
+					"egressPeerId": n.EgressPeerID,
+					"policyRules":  n.PolicyRules,
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
 		case http.MethodGet:
 			nodeID := r.URL.Query().Get("nodeId")
 			if nodeID == "" {

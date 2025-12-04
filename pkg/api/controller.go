@@ -41,7 +41,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			"consulAddr":   consulAddr,
 			"publicAddr":   controllerAddr,
 			"planVersion":  atomic.LoadInt64(planVersion),
-			"buildVersion": version.Build,
+			"buildVersion": version.BuildCN(),
 		}
 		if dbRef != nil {
 			sqlDB, err := dbRef.DB()
@@ -122,15 +122,16 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		}
 
 		node := model.Node{
-			ID:            req.ID,
-			PublicKey:     pub,
-			Endpoints:     req.Endpoints,
-			CIDRs:         req.CIDRs,
-			ListenPort:    req.ListenPort,
-			OverlayIP:     req.OverlayIP,
-			ASN:           req.ASN,
-			RouterID:      req.RouterID,
-			PeerEndpoints: req.PeerEndpoints,
+			ID:             req.ID,
+			PublicKey:      pub,
+			Endpoints:      req.Endpoints,
+			CIDRs:          req.CIDRs,
+			ListenPort:     req.ListenPort,
+			OverlayIP:      req.OverlayIP,
+			ASN:            req.ASN,
+			RouterID:       req.RouterID,
+			PeerEndpoints:  req.PeerEndpoints,
+			ProvisionToken: req.ProvisionToken,
 		}
 
 		if allowWithoutJWT {
@@ -141,12 +142,13 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if node.PrivateKey == "" {
 				node.PrivateKey = existing.PrivateKey
 			}
-			if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
+			if existing.OverlayIP != "" {
+				node.OverlayIP = existing.OverlayIP
+			} else if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
 				node.OverlayIP = existing.OverlayIP
 			}
-			if node.ProvisionToken == "" {
-				node.ProvisionToken = existing.ProvisionToken
-			}
+			// always keep existing token once assigned
+			node.ProvisionToken = existing.ProvisionToken
 			if node.ListenPort == 0 {
 				node.ListenPort = existing.ListenPort
 			}
@@ -173,9 +175,13 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if node.PrivateKey == "" {
 				node.PrivateKey = existing.PrivateKey
 			}
-			if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
+			if existing.OverlayIP != "" {
+				node.OverlayIP = existing.OverlayIP
+			} else if node.OverlayIP == "" || (isPlaceholderOverlay(node.OverlayIP) && existing.OverlayIP != "") {
 				node.OverlayIP = existing.OverlayIP
 			}
+			// always keep existing token once assigned
+			node.ProvisionToken = existing.ProvisionToken
 			if node.ListenPort == 0 {
 				node.ListenPort = existing.ListenPort
 			}
@@ -194,9 +200,8 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			if len(node.PeerEndpoints) == 0 {
 				node.PeerEndpoints = existing.PeerEndpoints
 			}
-			if node.ProvisionToken == "" {
-				node.ProvisionToken = existing.ProvisionToken
-			}
+			// always keep existing token once assigned
+			node.ProvisionToken = existing.ProvisionToken
 		}
 		if node.RouterID == "" && node.OverlayIP != "" {
 			if idx := strings.Index(node.OverlayIP, "/"); idx > 0 {
