@@ -17,6 +17,7 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${ROOT}/dist"
 mkdir -p "${DIST}"
+BUILD_VERSION=${BUILD_VERSION:-${RELEASE_TAG:-$(TZ=Asia/Shanghai date +%Y-%m-%d-%H-%M)}}
 
 build_one() {
   local os="$1"
@@ -26,8 +27,8 @@ build_one() {
   local outdir="${DIST}/${suffix}"
   mkdir -p "${outdir}"
   echo "Building ${os}/${arch} ${extra_env}"
-  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/controller-${suffix}" "${ROOT}/cmd/controller"
-  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -o "${outdir}/agent-${suffix}" "${ROOT}/cmd/agent"
+  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -ldflags="-s -w -X peer-wan/pkg/version.Build=${BUILD_VERSION}" -o "${outdir}/controller-${suffix}" "${ROOT}/cmd/controller"
+  env CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" ${extra_env} go build -tags=consul -ldflags="-s -w -X peer-wan/pkg/version.Build=${BUILD_VERSION}" -o "${outdir}/agent-${suffix}" "${ROOT}/cmd/agent"
 }
 
 # Matrix: (os arch extra_env)

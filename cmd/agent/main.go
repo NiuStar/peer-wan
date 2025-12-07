@@ -38,7 +38,7 @@ func main() {
 	endpoints := flag.String("endpoints", "127.0.0.1:51820", "comma separated endpoints")
 	cidrs := flag.String("cidrs", "10.10.1.0/24", "comma separated CIDRs announced by this node")
 	overlayIP := flag.String("overlay-ip", "10.10.1.1/32", "overlay interface IP (wg Address)")
-	listenPort := flag.Int("listen-port", 51820, "wireguard listen port")
+	listenPort := flag.Int("listen-port", 82, "wireguard listen port")
 	privateKey := flag.String("priv", "stub-private-key", "wireguard private key (placeholder)")
 	outputDir := flag.String("out", firstNonEmpty(defaultOut, "./out"), "directory to write rendered configs")
 	iface := flag.String("iface", "wg0", "wireguard interface name")
@@ -126,8 +126,12 @@ func main() {
 		log.Printf("apply succeeded (wg-quick up + vtysh -b)")
 	}
 
-	if *healthInterval > 0 {
-		agent.StartHealthReporter(client, *controller, *authToken, *provisionToken, cfg.ID, cfg.WireGuardPeers, *healthInterval)
+	autoHealthInterval := *healthInterval
+	if autoHealthInterval <= 0 && cfg.HealthIntervalSec > 0 {
+		autoHealthInterval = time.Duration(cfg.HealthIntervalSec) * time.Second
+	}
+	if autoHealthInterval > 0 {
+		agent.StartHealthReporter(client, *controller, *authToken, *provisionToken, cfg.ID, cfg.WireGuardPeers, autoHealthInterval)
 	}
 
 	if *planInterval > 0 {

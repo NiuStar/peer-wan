@@ -50,10 +50,13 @@ func main() {
 	default:
 		log.Fatalf("unsupported store type: %s", *storeType)
 	}
+	wsHub := api.NewWSHub()
 	log.Printf("starting controller version=%s store=%s consul=%s publicAddr=%s", version.BuildCN(), *storeType, *consulAddr, *publicAddr)
 
 	mux := http.NewServeMux()
-	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr, *storeType, *consulAddr)
+	api.RegisterRoutes(mux, nodeStore, "", &planVersion, *publicAddr, *storeType, *consulAddr, wsHub)
+	mux.HandleFunc("/api/v1/ws/agent", wsHub.HandleAgentWS)
+	mux.HandleFunc("/api/v1/ws/logs", wsHub.HandleUILogs)
 
 	uiFS, err := fs.Sub(assets.UI, "web")
 	if err != nil {
@@ -74,6 +77,24 @@ func main() {
 			log.Printf("consul watch triggered; planVersion=%d", planVersion)
 		})
 	}
+	// periodic prune health history (>24h)
+	go func() {
+		t := time.NewTicker(1 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if pruner, ok := nodeStore.(interface{ PruneHealthBefore(time.Time) error }); ok {
+					cutoff := time.Now().Add(-24 * time.Hour)
+					if err := pruner.PruneHealthBefore(cutoff); err != nil {
+						log.Printf("prune health history failed: %v", err)
+					}
+				}
+			}
+		}
+	}()
 	if lg, ok := nodeStore.(interface {
 		LeaderGuard(context.Context, string, time.Duration, func(context.Context))
 	}); ok && *storeType == "consul" {

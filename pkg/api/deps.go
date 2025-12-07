@@ -9,7 +9,10 @@ import (
 	"peer-wan/pkg/auth"
 )
 
-var dbRef *gorm.DB
+var (
+	dbRef       *gorm.DB
+	wsHubGlobal *WSHub
+)
 
 func SetDB(db *gorm.DB) {
 	dbRef = db

@@ -6,24 +6,34 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"peer-wan/pkg/version"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"peer-wan/pkg/model"
+	"peer-wan/pkg/policy"
 	"peer-wan/pkg/store"
 	"peer-wan/pkg/topology"
+	"peer-wan/pkg/version"
 )
 
 // RegisterRoutes wires the HTTP handlers on the provided mux.
-func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64, controllerAddr, storeType, consulAddr string) {
+func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, planVersion *int64, controllerAddr, storeType, consulAddr string, wsHub *WSHub) {
 	authHandler := &AuthHandler{DB: dbRef}
 	authHandler.RegisterRoutes(mux)
 	auth := authFuncJWT
+	wsHubGlobal = wsHub
 	RegisterPolicyRoutes(mux, store, auth, planVersion)
+	RegisterPolicyStatusRoutes(mux, store, auth)
+	RegisterPolicyDiagRoutes(mux, store, auth)
+	if wsHub != nil {
+		RegisterPolicyCommandRoutes(mux, auth, wsHub)
+		RegisterTaskRoutes(mux, store, auth, wsHub)
+	}
 	RegisterPrepareRoute(mux, store, planVersion, auth, controllerAddr)
+	RegisterStatusRoutes(mux, store, auth)
+	RegisterDiagnoseRoutes(mux, store, auth)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -65,6 +75,74 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		writeJSON(w, http.StatusOK, info)
 	})
 
+	mux.HandleFunc("/api/v1/settings/geoip", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet {
+			s := loadSettingsOrDefault(store)
+			writeJSON(w, http.StatusOK, s.GeoIP)
+			return
+		}
+		if r.Method == http.MethodPost {
+			var cfg model.GeoIPConfig
+			if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+				http.Error(w, "invalid payload", http.StatusBadRequest)
+				return
+			}
+			s := loadSettingsOrDefault(store)
+			if cfg.CacheDir != "" {
+				s.GeoIP.CacheDir = cfg.CacheDir
+			}
+			if cfg.SourceV4 != "" {
+				s.GeoIP.SourceV4 = cfg.SourceV4
+			}
+			if cfg.SourceV6 != "" {
+				s.GeoIP.SourceV6 = cfg.SourceV6
+			}
+			if cfg.CacheTTL != "" {
+				s.GeoIP.CacheTTL = cfg.CacheTTL
+			}
+			if err := store.UpdateSettings(s); err != nil {
+				http.Error(w, "failed to save settings", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.GeoIP)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
+
+	mux.HandleFunc("/api/v1/settings/diag", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			s := loadSettingsOrDefault(store)
+			writeJSON(w, http.StatusOK, s.Diag)
+		case http.MethodPost:
+			var cfg model.DiagConfig
+			if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+				http.Error(w, "invalid payload", http.StatusBadRequest)
+				return
+			}
+			s := loadSettingsOrDefault(store)
+			if cfg.PingInterval != "" {
+				s.Diag.PingInterval = cfg.PingInterval
+			}
+			if err := store.UpdateSettings(s); err != nil {
+				http.Error(w, "failed to save settings", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.Diag)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	mux.HandleFunc("/api/v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -78,6 +156,11 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 		if err != nil {
 			http.Error(w, "failed to list nodes", http.StatusInternalServerError)
 			return
+		}
+		for i := range nodes {
+			if nodes[i].Version == "" && nodes[i].ConfigVersion != "" {
+				nodes[i].Version = nodes[i].ConfigVersion
+			}
 		}
 		writeJSON(w, http.StatusOK, nodes)
 	})
@@ -230,6 +313,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 
 		// recompute plans for all nodes to propagate new peer
 		allNodes, _ := store.ListNodes()
+		policyMap := expandPolicyRules(allNodes)
 		healthList, _ := store.ListHealth()
 		hmap := make(map[string]model.HealthReport)
 		for _, h := range healthList {
@@ -247,21 +331,26 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			saved.ConfigVersion = version.Build
 		}
 		resp := NodeConfigResponse{
-			ID:             saved.ID,
-			ConfigVersion:  saved.ConfigVersion,
-			WireGuardPeers: localPlan,
-			Routes:         saved.CIDRs,
-			OverlayIP:      saved.OverlayIP,
-			ListenPort:     saved.ListenPort,
-			ASN:            saved.ASN,
-			RouterID:       saved.RouterID,
-			Endpoints:      saved.Endpoints,
-			PrivateKey:     saved.PrivateKey,
-			PublicKey:      saved.PublicKey,
-			EgressPeerID:   saved.EgressPeerID,
-			PolicyRules:    saved.PolicyRules,
-			PeerEndpoints:  saved.PeerEndpoints,
-			Message:        "registered; peer plan derived from currently known nodes",
+			ID:                  saved.ID,
+			ConfigVersion:       saved.ConfigVersion,
+			WireGuardPeers:      localPlan,
+			Routes:              saved.CIDRs,
+			OverlayIP:           saved.OverlayIP,
+			ListenPort:          saved.ListenPort,
+			ASN:                 saved.ASN,
+			RouterID:            saved.RouterID,
+			Endpoints:           saved.Endpoints,
+			PrivateKey:          saved.PrivateKey,
+			PublicKey:           saved.PublicKey,
+			EgressPeerID:        saved.EgressPeerID,
+			PolicyRules:         policyMap[saved.ID],
+			PeerEndpoints:       saved.PeerEndpoints,
+			GeoIPConfig:         ptrGeoIP(loadSettingsOrDefault(store).GeoIP),
+			DefaultRoute:        saved.DefaultRoute,
+			BypassCIDRs:         saved.BypassCIDRs,
+			DefaultRouteNextHop: saved.DefaultRouteNextHop,
+			HealthIntervalSec:   diagIntervalSeconds(store),
+			Message:             "registered; peer plan derived from currently known nodes",
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
@@ -288,9 +377,10 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			}
 			// recalc plan for this node and store
 			nodes, _ := store.ListNodes()
+			policyMap := expandPolicyRules(nodes)
 			hmap := map[string]model.HealthReport{report.NodeID: report}
 			peerPlan := topology.BuildPeerPlan(report.NodeID, nodes, hmap)
-			savePlan(store, model.Node{ID: report.NodeID}, peerPlan, planVersion)
+			savePlanWithRules(store, model.Node{ID: report.NodeID}, peerPlan, policyMap[report.NodeID], planVersion)
 			BumpPlanVersion(planVersion)
 			_ = store.AppendAudit(model.AuditEntry{
 				Actor:     report.NodeID,
@@ -311,6 +401,36 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
+
+	mux.HandleFunc("/api/v1/health/history", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		nodeID := r.URL.Query().Get("nodeId")
+		if nodeID == "" {
+			http.Error(w, "nodeId is required", http.StatusBadRequest)
+			return
+		}
+		hoursStr := r.URL.Query().Get("hours")
+		hours := 24
+		if hoursStr != "" {
+			if v, err := strconv.Atoi(hoursStr); err == nil && v > 0 {
+				hours = v
+			}
+		}
+		since := time.Now().Add(-time.Duration(hours) * time.Hour)
+		hist, err := store.ListHealthHistory(nodeID, since)
+		if err != nil {
+			http.Error(w, "failed to list history", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, hist)
 	})
 
 	mux.HandleFunc("/api/v1/audit", func(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +473,7 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 			http.Error(w, "failed to list nodes", http.StatusInternalServerError)
 			return
 		}
+		policyMap := expandPolicyRules(nodes)
 		healthList, _ := store.ListHealth()
 		hmap := make(map[string]model.HealthReport)
 		for _, h := range healthList {
@@ -373,21 +494,26 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 				version = "dynamic-v" + itoa(v)
 			}
 		}
-		savePlan(store, target, peerPlan, planVersion)
+		savePlanWithRules(store, target, peerPlan, policyMap[nodeID], planVersion)
 		resp := NodeConfigResponse{
-			ID:             nodeID,
-			ConfigVersion:  version,
-			WireGuardPeers: peerPlan,
-			Routes:         target.CIDRs,
-			OverlayIP:      target.OverlayIP,
-			ListenPort:     target.ListenPort,
-			ASN:            target.ASN,
-			RouterID:       target.RouterID,
-			Endpoints:      target.Endpoints,
-			PeerEndpoints:  target.PeerEndpoints,
-			EgressPeerID:   target.EgressPeerID,
-			PolicyRules:    target.PolicyRules,
-			Message:        "dynamic plan based on current health",
+			ID:                  nodeID,
+			ConfigVersion:       version,
+			WireGuardPeers:      peerPlan,
+			Routes:              target.CIDRs,
+			OverlayIP:           target.OverlayIP,
+			ListenPort:          target.ListenPort,
+			ASN:                 target.ASN,
+			RouterID:            target.RouterID,
+			Endpoints:           target.Endpoints,
+			PeerEndpoints:       target.PeerEndpoints,
+			EgressPeerID:        target.EgressPeerID,
+			PolicyRules:         policyMap[nodeID],
+			GeoIPConfig:         ptrGeoIP(loadSettingsOrDefault(store).GeoIP),
+			DefaultRoute:        target.DefaultRoute,
+			BypassCIDRs:         target.BypassCIDRs,
+			DefaultRouteNextHop: target.DefaultRouteNextHop,
+			HealthIntervalSec:   diagIntervalSeconds(store),
+			Message:             "dynamic plan based on current health",
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
@@ -454,6 +580,13 @@ func RegisterRoutes(mux *http.ServeMux, store store.NodeStore, token string, pla
 }
 
 func savePlan(store store.NodeStore, node model.Node, peers []model.Peer, planVersion *int64) {
+	savePlanWithRules(store, node, peers, node.PolicyRules, planVersion)
+}
+
+func savePlanWithRules(store store.NodeStore, node model.Node, peers []model.Peer, rules []model.PolicyRule, planVersion *int64) {
+	if node.ListenPort == 0 {
+		node.ListenPort = 82
+	}
 	var version int64
 	if planVersion != nil {
 		version = atomic.AddInt64(planVersion, 1)
@@ -463,19 +596,45 @@ func savePlan(store store.NodeStore, node model.Node, peers []model.Peer, planVe
 		cv = "dynamic-v" + itoa(version)
 	}
 	p := model.Plan{
-		NodeID:        node.ID,
-		Version:       version,
-		ConfigVersion: cv,
-		Peers:         peers,
-		Routes:        node.CIDRs,
-		CreatedAt:     time.Now(),
-		Signature:     signPlan(node, peers, cv),
-		EgressPeerID:  node.EgressPeerID,
-		PolicyRules:   node.PolicyRules,
-		PeerEndpoints: node.PeerEndpoints,
+		NodeID:              node.ID,
+		Version:             version,
+		ConfigVersion:       cv,
+		Peers:               peers,
+		Routes:              node.CIDRs,
+		CreatedAt:           time.Now(),
+		Signature:           signPlan(node, peers, cv),
+		EgressPeerID:        node.EgressPeerID,
+		PolicyRules:         rules,
+		PeerEndpoints:       node.PeerEndpoints,
+		DefaultRoute:        node.DefaultRoute,
+		BypassCIDRs:         node.BypassCIDRs,
+		DefaultRouteNextHop: node.DefaultRouteNextHop,
 	}
 	_ = store.SavePlan(p)
 	_ = store.SetGlobalPlanVersion(version)
+	if wsHubGlobal != nil {
+		resp := NodeConfigResponse{
+			ID:                  node.ID,
+			ConfigVersion:       cv,
+			WireGuardPeers:      peers,
+			Routes:              node.CIDRs,
+			OverlayIP:           node.OverlayIP,
+			ListenPort:          node.ListenPort,
+			ASN:                 node.ASN,
+			RouterID:            node.RouterID,
+			Endpoints:           node.Endpoints,
+			PeerEndpoints:       node.PeerEndpoints,
+			EgressPeerID:        node.EgressPeerID,
+			PolicyRules:         rules,
+			GeoIPConfig:         ptrGeoIP(loadSettingsOrDefault(store).GeoIP),
+			DefaultRoute:        node.DefaultRoute,
+			BypassCIDRs:         node.BypassCIDRs,
+			DefaultRouteNextHop: node.DefaultRouteNextHop,
+			HealthIntervalSec:   diagIntervalSeconds(store),
+			Message:             "ws plan push",
+		}
+		wsHubGlobal.Send(node.ID, WSMessage{Type: "plan", NodeID: node.ID, Payload: resp})
+	}
 }
 
 // RecomputeAllPlans recalculates peer plans for all nodes and stores them.
@@ -484,6 +643,7 @@ func RecomputeAllPlans(store store.NodeStore, planVersion *int64) error {
 	if err != nil {
 		return err
 	}
+	policyMap := expandPolicyRules(nodes)
 	healthList, _ := store.ListHealth()
 	hmap := make(map[string]model.HealthReport)
 	for _, h := range healthList {
@@ -491,7 +651,7 @@ func RecomputeAllPlans(store store.NodeStore, planVersion *int64) error {
 	}
 	for _, n := range nodes {
 		peers := topology.BuildPeerPlan(n.ID, nodes, hmap)
-		savePlan(store, n, peers, planVersion)
+		savePlanWithRules(store, n, peers, policyMap[n.ID], planVersion)
 	}
 	return nil
 }
@@ -564,6 +724,42 @@ func isPlaceholderOverlay(s string) bool {
 	return s == "" || s == "10.10.1.1/32"
 }
 
+// expandPolicyRules takes nodes' policy definitions and distributes hop-by-hop rules to path intermediates.
+// For a rule with path [A,B], source node gets via=A, node A gets via=B, final hop has no extra rule.
+func expandPolicyRules(nodes []model.Node) map[string][]model.PolicyRule {
+	out := make(map[string][]model.PolicyRule)
+	for _, n := range nodes {
+		for _, pr := range n.PolicyRules {
+			if len(pr.Path) == 0 {
+				out[n.ID] = append(out[n.ID], pr)
+				continue
+			}
+			// ensure ViaNode defaults to last hop for compatibility
+			if pr.ViaNode == "" {
+				pr.ViaNode = pr.Path[len(pr.Path)-1]
+			}
+			hops := append([]string(nil), pr.Path...)
+			if len(hops) == 0 {
+				out[n.ID] = append(out[n.ID], pr)
+				continue
+			}
+			// source node -> first hop
+			srcRule := pr
+			srcRule.ViaNode = hops[0]
+			srcRule.Path = nil
+			out[n.ID] = append(out[n.ID], srcRule)
+			// intermediate hops: each node forwards to next hop
+			for i := 1; i < len(hops); i++ {
+				hopRule := pr
+				hopRule.ViaNode = hops[i]
+				hopRule.Path = nil
+				out[hops[i-1]] = append(out[hops[i-1]], hopRule)
+			}
+		}
+	}
+	return out
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -601,4 +797,55 @@ func authFunc(token string) func(r *http.Request) bool {
 		}
 		return h == token
 	}
+}
+
+func loadSettingsOrDefault(st store.NodeStore) model.Settings {
+	def := model.Settings{
+		GeoIP: model.GeoIPConfig{
+			CacheDir: policy.DefaultCacheDir(),
+			SourceV4: policy.DefaultSourceV4(),
+			SourceV6: policy.DefaultSourceV6(),
+			CacheTTL: "24h",
+		},
+		Diag: model.DiagConfig{
+			PingInterval: "3s",
+		},
+	}
+	if st == nil {
+		return def
+	}
+	s, err := st.GetSettings()
+	if err != nil {
+		return def
+	}
+	if s.GeoIP.CacheDir == "" {
+		s.GeoIP.CacheDir = def.GeoIP.CacheDir
+	}
+	if s.GeoIP.SourceV4 == "" {
+		s.GeoIP.SourceV4 = def.GeoIP.SourceV4
+	}
+	if s.GeoIP.SourceV6 == "" {
+		s.GeoIP.SourceV6 = def.GeoIP.SourceV6
+	}
+	if s.GeoIP.CacheTTL == "" {
+		s.GeoIP.CacheTTL = def.GeoIP.CacheTTL
+	}
+	if s.Diag.PingInterval == "" {
+		s.Diag.PingInterval = def.Diag.PingInterval
+	}
+	return s
+}
+
+func ptrGeoIP(c model.GeoIPConfig) *model.GeoIPConfig {
+	return &c
+}
+
+func diagIntervalSeconds(st store.NodeStore) int {
+	cfg := loadSettingsOrDefault(st)
+	if cfg.Diag.PingInterval != "" {
+		if d, err := time.ParseDuration(cfg.Diag.PingInterval); err == nil {
+			return int(d.Seconds())
+		}
+	}
+	return 0
 }

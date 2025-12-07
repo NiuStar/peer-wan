@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 )
@@ -16,6 +17,9 @@ func ApplyConfigs(wgConfPath, iface string, bgpConfPath string) error {
 
 	if err := applyWireGuard(wgConfPath, iface); err != nil {
 		return err
+	}
+	if err := ensureNAT(iface); err != nil {
+		log.Printf("ensure NAT failed: %v", err)
 	}
 	if err := run("vtysh", "-b", "-f", bgpConfPath); err != nil {
 		return fmt.Errorf("vtysh apply bgp: %w", err)

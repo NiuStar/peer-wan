@@ -20,19 +20,24 @@ type NodeRegistrationRequest struct {
 
 // NodeConfigResponse carries the config the agent should apply.
 type NodeConfigResponse struct {
-	ID             string             `json:"id"`
-	ConfigVersion  string             `json:"configVersion"`
-	WireGuardPeers []model.Peer       `json:"wireGuardPeers"`
-	Routes         []string           `json:"routes"`
-	OverlayIP      string             `json:"overlayIp,omitempty"`
-	ListenPort     int                `json:"listenPort,omitempty"`
-	ASN            int                `json:"asn,omitempty"`
-	RouterID       string             `json:"routerId,omitempty"`
-	Endpoints      []string           `json:"endpoints,omitempty"`
-	PrivateKey     string             `json:"privateKey,omitempty"`
-	PublicKey      string             `json:"publicKey,omitempty"`
-	Message        string             `json:"message,omitempty"`
-	EgressPeerID   string             `json:"egressPeerId,omitempty"`
-	PolicyRules    []model.PolicyRule `json:"policyRules,omitempty"`
-	PeerEndpoints  map[string]string  `json:"peerEndpoints,omitempty"`
+	ID                  string             `json:"id"`
+	ConfigVersion       string             `json:"configVersion"`
+	WireGuardPeers      []model.Peer       `json:"wireGuardPeers"`
+	Routes              []string           `json:"routes"`
+	OverlayIP           string             `json:"overlayIp,omitempty"`
+	ListenPort          int                `json:"listenPort,omitempty"`
+	ASN                 int                `json:"asn,omitempty"`
+	RouterID            string             `json:"routerId,omitempty"`
+	Endpoints           []string           `json:"endpoints,omitempty"`
+	PrivateKey          string             `json:"privateKey,omitempty"`
+	PublicKey           string             `json:"publicKey,omitempty"`
+	Message             string             `json:"message,omitempty"`
+	EgressPeerID        string             `json:"egressPeerId,omitempty"`
+	PolicyRules         []model.PolicyRule `json:"policyRules,omitempty"`
+	PeerEndpoints       map[string]string  `json:"peerEndpoints,omitempty"`
+	GeoIPConfig         *model.GeoIPConfig `json:"geoip,omitempty"`
+	DefaultRoute        bool               `json:"defaultRoute,omitempty"`
+	BypassCIDRs         []string           `json:"bypassCidrs,omitempty"`
+	DefaultRouteNextHop string             `json:"defaultRouteNextHop,omitempty"`
+	HealthIntervalSec   int                `json:"healthIntervalSec,omitempty"`
 }

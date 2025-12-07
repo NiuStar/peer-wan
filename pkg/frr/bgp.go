@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"peer-wan/pkg/model"
+	"peer-wan/pkg/policy"
 )
 
 // BGPConfig contains rendered FRR bgpd configuration.
@@ -46,26 +47,18 @@ func RenderBGP(localASN int, routerID string, sourceInterface string, neighbors 
 		}
 	}
 	for _, pr := range plan.PolicyRules {
-		if pr.ViaNode == "" {
+		if pr.ViaNode == "" && len(pr.Path) == 0 {
 			continue
 		}
-		nh := stripMask(overlayForPeer(pr.ViaNode, plan.Peers))
+		nextID := pr.ViaNode
+		if len(pr.Path) > 0 {
+			nextID = pr.Path[0]
+		}
+		nh := stripMask(overlayForPeer(nextID, plan.Peers))
 		if nh == "" {
 			continue
 		}
-		targets := []string{}
-		if pr.Prefix != "" {
-			pfx := pr.Prefix
-			if !strings.Contains(pfx, "/") {
-				pfx = pr.Prefix + "/32"
-			}
-			targets = append(targets, pfx)
-		}
-		for _, d := range pr.Domains {
-			for _, ip := range resolveDomain(d) {
-				targets = append(targets, ip+"/32")
-			}
-		}
+		targets := policy.Expand(pr)
 		for _, t := range targets {
 			fmt.Fprintf(&b, " ip route %s %s\n", t, nh)
 		}

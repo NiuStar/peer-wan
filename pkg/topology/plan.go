@@ -7,8 +7,9 @@ import (
 )
 
 // BuildPeerPlan derives a simple full-mesh peer list for the target node.
-// For now it picks the first endpoint of each other node and uses its CIDRs
-// as AllowedIPs. Later this can evolve into intent-based or latency-aware plans.
+// It picks the first endpoint of each other node and only includes that node's
+// own overlay/CIDRs as AllowedIPs (others are redundant and can break wg routing).
+// Later this can evolve into intent-based or latency-aware plans.
 func BuildPeerPlan(targetID string, nodes []model.Node, health map[string]model.HealthReport) []model.Peer {
 	type scored struct {
 		peer  model.Peer
@@ -44,9 +45,17 @@ func BuildPeerPlan(targetID string, nodes []model.Node, health map[string]model.
 		if len(n.Endpoints) > 0 {
 			endpoint = n.Endpoints[0]
 		}
-		allowed := n.CIDRs
+		allowed := make([]string, 0, len(n.CIDRs)+1)
+		seen := make(map[string]bool, len(n.CIDRs)+1)
 		if n.OverlayIP != "" {
-			allowed = append([]string{n.OverlayIP}, allowed...)
+			allowed = append(allowed, n.OverlayIP)
+			seen[n.OverlayIP] = true
+		}
+		for _, cidr := range n.CIDRs {
+			if !seen[cidr] {
+				allowed = append(allowed, cidr)
+				seen[cidr] = true
+			}
 		}
 		peers = append(peers, scored{peer: model.Peer{
 			ID:         n.ID,

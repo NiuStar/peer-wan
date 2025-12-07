@@ -33,6 +33,9 @@ func StartHealthReporter(client *http.Client, controller, authToken, provisionTo
 }
 
 func reportOnce(client *http.Client, controller, authToken, provisionToken, nodeID string, peers []model.Peer) error {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	latency := map[string]int{}
 	loss := map[string]float64{}
 	for _, p := range peers {
@@ -54,13 +57,18 @@ func reportOnce(client *http.Client, controller, authToken, provisionToken, node
 		LatencyMs:  latency,
 		PacketLoss: loss,
 		FRRState:   frrState,
+		Timestamp:  time.Now(),
 	}
+	wsSend("health", report)
 	return postJSON(client, controller+"/api/v1/health", authToken, provisionToken, report)
 }
 
 func peerOverlayIP(p model.Peer) string {
 	for _, ip := range p.AllowedIPs {
 		if strings.Contains(ip, "/") {
+			if idx := strings.Index(ip, "/"); idx > 0 {
+				return ip[:idx]
+			}
 			return ip
 		}
 		if net.ParseIP(ip) != nil {
