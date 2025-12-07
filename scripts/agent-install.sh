@@ -308,14 +308,34 @@ chmod +x "${TMP_DIR}/agent"
 install -m 0755 "${TMP_DIR}/agent" "${BIN_DIR}/agent"
 echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
 
-# download wstunnel (best effort)
+# download wstunnel (best effort, versioned tarball)
 WST_BIN="${BIN_DIR}/wstunnel"
+map_wst_arch() {
+  case "${GOARCH}" in
+    amd64) echo "amd64" ;;
+    arm64) echo "arm64" ;;
+    arm) echo "armv7" ;; # best effort
+    386) echo "386" ;;
+    *) echo "${GOARCH}" ;;
+  esac
+}
 if [ ! -x "${WST_BIN}" ]; then
   echo "[peer-wan] downloading wstunnel..."
-  WST_URL="https://github.com/erebe/wstunnel/releases/latest/download/wstunnel-linux_${GOARCH}"
-  if curl -fL --progress-bar "${WST_URL}" -o "${TMP_DIR}/wstunnel"; then
-    install -m 0755 "${TMP_DIR}/wstunnel" "${WST_BIN}"
-    echo "[peer-wan] wstunnel installed to ${WST_BIN}"
+  WST_VERSION="${WST_VERSION:-v10.5.1}"
+  WST_VER_NUM=$(echo "${WST_VERSION}" | sed 's/^v//')
+  WST_OS="${OS_FAMILY}"
+  WST_ARCH=$(map_wst_arch)
+  WST_TARBALL="wstunnel_${WST_VER_NUM}_${WST_OS}_${WST_ARCH}.tar.gz"
+  WST_URL="https://github.com/erebe/wstunnel/releases/download/${WST_VERSION}/${WST_TARBALL}"
+  if curl -fL --progress-bar "${WST_URL}" -o "${TMP_DIR}/${WST_TARBALL}"; then
+    tar -xzf "${TMP_DIR}/${WST_TARBALL}" -C "${TMP_DIR}" || true
+    # prefer extracted binary named wstunnel
+    if [ -f "${TMP_DIR}/wstunnel" ]; then
+      install -m 0755 "${TMP_DIR}/wstunnel" "${WST_BIN}"
+      echo "[peer-wan] wstunnel installed to ${WST_BIN} (url=${WST_URL})"
+    else
+      echo "[peer-wan][warn] tarball extracted but wstunnel not found, please place binary at ${WST_BIN}"
+    fi
   else
     echo "[peer-wan][warn] failed to download wstunnel from ${WST_URL}, please place binary at ${WST_BIN}"
   fi
