@@ -327,7 +327,7 @@ if [ ! -x "${WST_BIN}" ]; then
   WST_ARCH=$(map_wst_arch)
   WST_TARBALL="wstunnel_${WST_VER_NUM}_${WST_OS}_${WST_ARCH}.tar.gz"
   WST_URL="https://github.com/erebe/wstunnel/releases/download/${WST_VERSION}/${WST_TARBALL}"
-  if curl -fL --progress-bar "${WST_URL}" -o "${TMP_DIR}/${WST_TARBALL}"; then
+  if curl -fL --progress-bar "$(proxy_wrap "${WST_URL}")" -o "${TMP_DIR}/${WST_TARBALL}"; then
     tar -xzf "${TMP_DIR}/${WST_TARBALL}" -C "${TMP_DIR}" || true
     # prefer extracted binary named wstunnel
     if [ -f "${TMP_DIR}/wstunnel" ]; then
