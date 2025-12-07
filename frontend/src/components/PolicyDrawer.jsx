@@ -115,6 +115,7 @@ export default function PolicyDrawer({ open, onClose, node, reloadNodes, nodes, 
   const [logsLoading, setLogsLoading] = useState(false);
   const [diag, setDiag] = useState(null);
   const [diagLoading, setDiagLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
   const [logLines, setLogLines] = useState([]);
   const [tasks, setTasks] = useState([]);
   const options = useMemo(() => (nodes || []).map(n => ({ label: n.id, value: n.id })), [nodes]);
@@ -182,6 +183,23 @@ export default function PolicyDrawer({ open, onClose, node, reloadNodes, nodes, 
       message.error('获取诊断失败: ' + e);
     } finally {
       setDiagLoading(false);
+    }
+  };
+  const runVerify = async () => {
+    if (!node) return;
+    setVerifyLoading(true);
+    try {
+      await api('/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId: node.id, type: 'verify' }),
+      });
+      message.success('已触发验证');
+      loadTasks();
+    } catch (e) {
+      message.error('触发验证失败: ' + e);
+    } finally {
+      setVerifyLoading(false);
     }
   };
   useWS(node ? `/api/v1/ws/logs?nodeId=${encodeURIComponent(node.id)}` : null, (data) => {
@@ -327,7 +345,17 @@ export default function PolicyDrawer({ open, onClose, node, reloadNodes, nodes, 
           {logLines.length ? logLines.join('\n') : '等待日志...'}
         </pre>
       </Card>
-      <Card size="small" title="策略诊断" style={{ marginTop: 12 }} extra={<Button size="small" loading={diagLoading} onClick={loadDiag}>诊断</Button>}>
+      <Card
+        size="small"
+        title="策略诊断"
+        style={{ marginTop: 12 }}
+        extra={(
+          <Space>
+            <Button size="small" loading={diagLoading} onClick={loadDiag}>诊断</Button>
+            <Button size="small" loading={verifyLoading} onClick={runVerify}>验证</Button>
+          </Space>
+        )}
+      >
         {diag ? (
           <>
             <Space style={{ marginBottom: 8 }}>

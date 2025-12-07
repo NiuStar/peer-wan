@@ -66,7 +66,8 @@ func RegisterPrepareRoute(mux *http.ServeMux, store store.NodeStore, planVersion
 				PublicKey:      pub.String(),
 				PrivateKey:     priv.String(),
 				OverlayIP:      overlay,
-				ListenPort:     51820,
+				// 默认使用 wg over wss 监听端口
+				ListenPort:     8082,
 				ASN:            65000,
 				RouterID:       ipWithoutMask(overlay),
 				ProvisionToken: token,

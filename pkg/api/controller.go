@@ -585,7 +585,8 @@ func savePlan(store store.NodeStore, node model.Node, peers []model.Peer, planVe
 
 func savePlanWithRules(store store.NodeStore, node model.Node, peers []model.Peer, rules []model.PolicyRule, planVersion *int64) {
 	if node.ListenPort == 0 {
-		node.ListenPort = 82
+		// WG over WSS 默认监听 8082
+		node.ListenPort = 8082
 	}
 	var version int64
 	if planVersion != nil {
@@ -722,6 +723,15 @@ func agentAuthorized(store store.NodeStore, nodeID, token string) bool {
 
 func isPlaceholderOverlay(s string) bool {
 	return s == "" || s == "10.10.1.1/32"
+}
+
+func firstNonZero(vals ...int) int {
+	for _, v := range vals {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // expandPolicyRules takes nodes' policy definitions and distributes hop-by-hop rules to path intermediates.

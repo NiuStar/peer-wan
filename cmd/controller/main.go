@@ -51,6 +51,7 @@ func main() {
 		log.Fatalf("unsupported store type: %s", *storeType)
 	}
 	wsHub := api.NewWSHub()
+	wsHub.AttachStore(nodeStore)
 	log.Printf("starting controller version=%s store=%s consul=%s publicAddr=%s", version.BuildCN(), *storeType, *consulAddr, *publicAddr)
 
 	mux := http.NewServeMux()

@@ -163,6 +163,13 @@ func handleWSCommand(payload map[string]interface{}, client *http.Client) {
 	case "install":
 		// re-ensure current plan
 		_ = ensureRuntimeState(cfg, n, ctx.iface, ctx.asn, ctx.outDir, ctx.private, ctx.apply, client, ctx.controller, ctx.auth, ctx.provision)
+	case "verify":
+		targets := collectVerifyTargets(cfg.PolicyRules)
+		if err := runCurlVerify(targets); err != nil {
+			reportPolicyStatus(client, ctx.controller, ctx.auth, ctx.provision, n.ID, cfg.ConfigVersion, "failed", err.Error(), nil)
+		} else {
+			reportPolicyStatus(client, ctx.controller, ctx.auth, ctx.provision, n.ID, cfg.ConfigVersion, "success", "验证通过", nil)
+		}
 	case "script":
 		cmd, _ := payload["cmd"].(string)
 		if cmd != "" {
@@ -213,6 +220,10 @@ func handleWSTask(payload map[string]interface{}, client *http.Client) {
 		return
 	}
 	currentTask = taskID
+	verifyTargets := toStringSlice(payload["verifyTargets"])
+	if len(verifyTargets) == 0 {
+		verifyTargets = collectVerifyTargets(cfg.PolicyRules)
+	}
 	step := func(name, status, msg string) {
 		wsSend("task_step", map[string]interface{}{
 			"taskId": taskID, "nodeId": n.ID, "name": name, "status": status, "message": msg, "ts": time.Now().Unix(),
@@ -223,25 +234,38 @@ func handleWSTask(payload map[string]interface{}, client *http.Client) {
 	runPolicyDiag(client, ctx.controller, ctx.auth, ctx.provision, n, cfg.ConfigVersion, ctx.iface, cfg.WireGuardPeers)
 	step("environment_check", "success", "环境检查完成")
 
-	step("apply", "running", "应用策略")
-	if _, err := handlePlan(cfg, n, ctx.outDir, ctx.iface, ctx.private, ctx.asn, ctx.apply, client, ctx.controller, ctx.auth, ctx.provision); err != nil {
-		step("apply", "fail", err.Error())
-		return
-	}
-	step("apply", "success", "策略应用完成")
+	switch taskType {
+	case "policy_diag":
+		step("diag", "running", "策略诊断")
+		runPolicyDiag(client, ctx.controller, ctx.auth, ctx.provision, n, cfg.ConfigVersion, ctx.iface, cfg.WireGuardPeers)
+		step("diag", "success", "诊断完成")
+	case "verify":
+		step("verify", "running", "出口验证")
+		if err := runCurlVerify(verifyTargets); err != nil {
+			step("verify", "fail", err.Error())
+			return
+		}
+		step("verify", "success", "目标验证通过")
+	default:
+		step("apply", "running", "应用策略")
+		if _, err := handlePlan(cfg, n, ctx.outDir, ctx.iface, ctx.private, ctx.asn, ctx.apply, client, ctx.controller, ctx.auth, ctx.provision); err != nil {
+			step("apply", "fail", err.Error())
+			return
+		}
+		step("apply", "success", "策略应用完成")
 
-	step("self_test", "running", "自检验证")
-	runPolicyDiag(client, ctx.controller, ctx.auth, ctx.provision, n, cfg.ConfigVersion, ctx.iface, cfg.WireGuardPeers)
-	step("self_test", "success", "自检完成")
+		step("self_test", "running", "自检验证")
+		runPolicyDiag(client, ctx.controller, ctx.auth, ctx.provision, n, cfg.ConfigVersion, ctx.iface, cfg.WireGuardPeers)
+		step("self_test", "success", "自检完成")
 
-	// final verify: curl -4 on rule prefixes/domains
-	step("verify", "running", "出口验证")
-	verifyTargets := collectVerifyTargets(cfg.PolicyRules)
-	if err := runCurlVerify(verifyTargets); err != nil {
-		step("verify", "fail", err.Error())
-		return
+		// final verify: curl -4 on rule prefixes/domains
+		step("verify", "running", "出口验证")
+		if err := runCurlVerify(verifyTargets); err != nil {
+			step("verify", "fail", err.Error())
+			return
+		}
+		step("verify", "success", "curl 验证通过")
 	}
-	step("verify", "success", "curl 验证通过")
 
 	step("complete", "success", "任务完成")
 	currentTask = ""
@@ -264,7 +288,8 @@ func mergePlanIntoNode(node model.Node, cfg api.NodeConfigResponse, asn int) (mo
 	if cfg.ListenPort > 0 {
 		n.ListenPort = cfg.ListenPort
 	} else if n.ListenPort == 0 {
-		n.ListenPort = 82
+		// WG over WSS 默认监听 8082
+		n.ListenPort = 8082
 	}
 	if cfg.ASN > 0 {
 		n.ASN = cfg.ASN
@@ -431,6 +456,22 @@ func runPolicyDiag(client *http.Client, controller, authToken, provisionToken st
 	}
 	wsLog("diag finish summary=%s checks=%d", summary, len(checks))
 }
+
+func toStringSlice(v interface{}) []string {
+	out := []string{}
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []interface{}:
+		for _, x := range t {
+			if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 func fetchPlan(controller, authToken, provisionToken, nodeID string) (api.NodeConfigResponse, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	// first check global plan version

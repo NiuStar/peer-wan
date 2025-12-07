@@ -7,6 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.1
 	github.com/hashicorp/consul/api v1.28.2
 	github.com/joho/godotenv v1.5.1
+	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.31.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	gorm.io/driver/mysql v1.5.7
@@ -19,7 +20,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.14.1 // indirect
 	github.com/go-sql-driver/mysql v1.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-hclog v1.5.0 // indirect

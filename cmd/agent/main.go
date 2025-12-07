@@ -38,7 +38,7 @@ func main() {
 	endpoints := flag.String("endpoints", "127.0.0.1:51820", "comma separated endpoints")
 	cidrs := flag.String("cidrs", "10.10.1.0/24", "comma separated CIDRs announced by this node")
 	overlayIP := flag.String("overlay-ip", "10.10.1.1/32", "overlay interface IP (wg Address)")
-	listenPort := flag.Int("listen-port", 82, "wireguard listen port")
+	listenPort := flag.Int("listen-port", 8082, "wireguard listen port")
 	privateKey := flag.String("priv", "stub-private-key", "wireguard private key (placeholder)")
 	outputDir := flag.String("out", firstNonEmpty(defaultOut, "./out"), "directory to write rendered configs")
 	iface := flag.String("iface", "wg0", "wireguard interface name")

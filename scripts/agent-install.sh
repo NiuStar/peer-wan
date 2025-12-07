@@ -62,10 +62,13 @@ echo "[peer-wan] NODE_ID=${NODE_ID}"
 echo "[peer-wan] PROVISION_TOKEN length=$(echo -n "${PROVISION_TOKEN}" | wc -c)"
 echo "[peer-wan] PLAN_INTERVAL=${PLAN_INTERVAL} HEALTH_INTERVAL=${HEALTH_INTERVAL} APPLY=${APPLY} SERVICE=${SERVICE}"
 
-BIN_DIR=${BIN_DIR:-/usr/local/bin}
-mkdir -p "${BIN_DIR}"
+BIN_DIR=${BIN_DIR:-/opt/peerwan/bin}
+LOG_DIR=/opt/peerwan/logs
+RUN_DIR=/opt/peerwan/run
+mkdir -p "${BIN_DIR}" "${LOG_DIR}" "${RUN_DIR}"
 TMP_DIR=$(mktemp -d)
 echo "[peer-wan] BIN_DIR=${BIN_DIR}"
+echo "[peer-wan] LOG_DIR=${LOG_DIR} RUN_DIR=${RUN_DIR}"
 echo "[peer-wan] TMP_DIR=${TMP_DIR}"
 echo "[peer-wan] resolving release tag..."
 
@@ -305,6 +308,19 @@ chmod +x "${TMP_DIR}/agent"
 install -m 0755 "${TMP_DIR}/agent" "${BIN_DIR}/agent"
 echo "[peer-wan] agent binary installed to ${BIN_DIR}/agent"
 
+# download wstunnel (best effort)
+WST_BIN="${BIN_DIR}/wstunnel"
+if [ ! -x "${WST_BIN}" ]; then
+  echo "[peer-wan] downloading wstunnel..."
+  WST_URL="https://github.com/erebe/wstunnel/releases/latest/download/wstunnel-linux_${GOARCH}"
+  if curl -fL --progress-bar "${WST_URL}" -o "${TMP_DIR}/wstunnel"; then
+    install -m 0755 "${TMP_DIR}/wstunnel" "${WST_BIN}"
+    echo "[peer-wan] wstunnel installed to ${WST_BIN}"
+  else
+    echo "[peer-wan][warn] failed to download wstunnel from ${WST_URL}, please place binary at ${WST_BIN}"
+  fi
+fi
+
 if [ "${OS_FAMILY}" != "darwin" ]; then
   echo "[peer-wan] configuring forwarding/NAT (best-effort)..."
   configure_network || true
@@ -318,6 +334,11 @@ WRAP_CONTROLLER="${CONTROLLER_ADDR}"
 WRAP_TOKEN="${TOKEN}"
 WRAP_NODE="${NODE_ID}"
 WRAP_PROVISION="${PROVISION_TOKEN}"
+: "\${LISTEN_PORT:=8082}"
+: "\${WSTUNNEL:=/opt/peerwan/bin/wstunnel}"
+: "\${WST_LOG:=/opt/peerwan/logs/wstunnel.log}"
+: "\${WST_MODE:=client}" # client | server
+: "\${WST_REMOTE:=wss://\${WRAP_CONTROLLER#http://}:\${LISTEN_PORT}}"
 : "\${CONTROLLER_ADDR:=${WRAP_CONTROLLER}}"
 : "\${TOKEN:=${WRAP_TOKEN}}"
 : "\${NODE_ID:=${WRAP_NODE}}"
@@ -327,6 +348,7 @@ ${BIN_DIR}/agent \\
   --id="\${NODE_ID}" \\
   --provision-token="\${PROVISION_TOKEN}" \\
   --token="\${TOKEN}" \\
+  --listen-port="\${LISTEN_PORT}" \\
   --auto-endpoint=true \\
   --plan-interval=${PLAN_INTERVAL} \\
   --health-interval=${HEALTH_INTERVAL} \\

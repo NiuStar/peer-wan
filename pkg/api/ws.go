@@ -4,8 +4,12 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+
+	"peer-wan/pkg/model"
+	"peer-wan/pkg/store"
 )
 
 // WSMessage defines a simple envelope for agent<->controller messages.
@@ -22,6 +26,7 @@ type WSHub struct {
 	agents   map[string]*websocket.Conn
 	logSubs  map[string]map[*websocket.Conn]struct{} // nodeID -> set of subscribers (UI)
 	taskUpd  map[string][]WSMessage                  // buffered task updates per taskId
+	store    store.NodeStore
 }
 
 func NewWSHub() *WSHub {
@@ -33,6 +38,11 @@ func NewWSHub() *WSHub {
 		logSubs: map[string]map[*websocket.Conn]struct{}{},
 		taskUpd: map[string][]WSMessage{},
 	}
+}
+
+// AttachStore allows persisting task steps into NodeStore.
+func (h *WSHub) AttachStore(st store.NodeStore) {
+	h.store = st
 }
 
 // HandleAgentWS upgrades and stores the connection for a node; expects ?nodeId=xxx
@@ -145,6 +155,27 @@ func (h *WSHub) handleTaskStep(msg WSMessage, nodeID string) {
 	h.mu.Lock()
 	h.taskUpd[taskID] = append(h.taskUpd[taskID], msg)
 	h.mu.Unlock()
+	if h.store != nil {
+		t, ok, _ := h.store.GetTask(taskID)
+		if !ok {
+			return
+		}
+		step := model.TaskStep{
+			Name:      asString(payload["name"]),
+			Status:    asString(payload["status"]),
+			Message:   asString(payload["message"]),
+			NodeID:    nodeID,
+			Timestamp: time.Now(),
+		}
+		if ts, ok := payload["ts"].(float64); ok && ts > 0 {
+			step.Timestamp = time.Unix(int64(ts), 0)
+		}
+		t.Steps = append(t.Steps, step)
+		t.Status = step.Status
+		t.OverallStatus = step.Status
+		t.UpdatedAt = time.Now()
+		_ = h.store.SaveTask(t)
+	}
 }
 
 func (h *WSHub) logSubLoop(nodeID string, c *websocket.Conn) {
@@ -167,4 +198,16 @@ func (h *WSHub) closeSub(nodeID string, c *websocket.Conn) {
 	}
 	h.mu.Unlock()
 	log.Printf("ui log subscriber disconnected node=%s", nodeID)
+}
+
+func asString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		return ""
+	}
 }

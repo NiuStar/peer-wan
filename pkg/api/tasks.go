@@ -24,9 +24,11 @@ func RegisterTaskRoutes(mux *http.ServeMux, st store.NodeStore, auth func(r *htt
 		switch r.Method {
 		case http.MethodPost:
 			var req struct {
-				NodeID  string   `json:"nodeId"`
-				Targets []string `json:"targets"`
-				Type    string   `json:"type"` // policy_apply / policy_diag
+				NodeID        string                 `json:"nodeId"`
+				Targets       []string               `json:"targets"`
+				Type          string                 `json:"type"` // policy_apply / policy_diag / verify
+				VerifyTargets []string               `json:"verifyTargets,omitempty"`
+				Data          map[string]interface{} `json:"data,omitempty"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Type == "" {
 				http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -54,7 +56,14 @@ func RegisterTaskRoutes(mux *http.ServeMux, st store.NodeStore, auth func(r *htt
 			}
 			_ = st.SaveTask(task)
 			for _, t := range targets {
-				hub.Send(t, WSMessage{Type: "task", NodeID: t, Payload: map[string]interface{}{"taskId": taskID, "type": req.Type}})
+				payload := map[string]interface{}{"taskId": taskID, "type": req.Type}
+				if len(req.VerifyTargets) > 0 {
+					payload["verifyTargets"] = req.VerifyTargets
+				}
+				if len(req.Data) > 0 {
+					payload["data"] = req.Data
+				}
+				hub.Send(t, WSMessage{Type: "task", NodeID: t, Payload: payload})
 			}
 			writeJSON(w, http.StatusOK, task)
 		case http.MethodGet:

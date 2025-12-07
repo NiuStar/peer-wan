@@ -27,12 +27,15 @@ func RenderAndWrite(outputDir, iface string, node model.Node, peers []model.Peer
 	}
 
 	peersWithPolicy := append([]model.Peer(nil), peers...)
-	originalEndpoints := []string{}
+	hostToLocal := allocateLocalPorts(peersWithPolicy, 30000)
 	for i, p := range peersWithPolicy {
-		if p.Endpoint != "" {
-			originalEndpoints = append(originalEndpoints, p.Endpoint)
+		host := endpointHost(p.Endpoint)
+		if host == "" {
+			continue
 		}
-		peersWithPolicy[i].Endpoint = "127.0.0.1:8082" // force WG to local tunnel
+		if lp, ok := hostToLocal[host]; ok {
+			peersWithPolicy[i].Endpoint = fmt.Sprintf("127.0.0.1:%d", lp)
+		}
 	}
 	augmentEgressAllowedIPs(&peersWithPolicy, node)
 
@@ -70,9 +73,8 @@ func RenderAndWrite(outputDir, iface string, node model.Node, peers []model.Peer
 	if err := applyStaticRoutes(plan, iface); err != nil {
 		log.Printf("apply static routes failed: %v", err)
 	}
-	// configure WSS tunnel (naive)
-	targetHosts := deriveHosts(originalEndpoints)
-	configureWSTunnel(targetHosts, node.ListenPort, 8082)
+	// start wstunnel server/client if available
+	wsTunMgr.startAll(hostToLocal, node.ListenPort)
 	return wgPath, bgpPath, nil
 }
 
