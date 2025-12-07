@@ -69,7 +69,12 @@ func (m *wstunnelManager) stopAllLocked() {
 
 func (m *wstunnelManager) startServerLocked(port int) {
 	logFile := filepath.Join(m.logDir, "wstunnel-server.log")
-	args := []string{"--server", fmt.Sprintf("ws://0.0.0.0:%d", port), "--udp-listen", fmt.Sprintf("127.0.0.1:%d", port), "--udp-timeout", "0", "--insecure"}
+	// wstunnel v10+: server <ws://addr>
+	args := []string{
+		"server",
+		fmt.Sprintf("ws://0.0.0.0:%d", port),
+		"--websocket-mask-frame", // avoid plain frames on ws
+	}
 	cmd := exec.Command(m.binPath, args...)
 	f, _ := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	cmd.Stdout = f
@@ -86,7 +91,12 @@ func (m *wstunnelManager) startClientLocked(host string, localPort, remotePort i
 	logFile := filepath.Join(m.logDir, fmt.Sprintf("wstunnel-%s.log", host))
 	local := fmt.Sprintf("udp://127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
 	remote := fmt.Sprintf("wss://%s:%d", host, remotePort)
-	args := []string{"--udp-timeout", "0", "--insecure", "-L", local, remote}
+	args := []string{
+		"client",
+		"--websocket-mask-frame", // mask frames to avoid proxy issues
+		"-L", local,
+		remote,
+	}
 	cmd := exec.Command(m.binPath, args...)
 	f, _ := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	cmd.Stdout = f
